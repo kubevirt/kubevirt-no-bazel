@@ -129,11 +129,13 @@ var getCgroupManager = func(vmi *v1.VirtualMachineInstance, host string, hypervi
 }
 
 func NewVirtualMachineController(
+	queue workqueue.TypedRateLimitingInterface[string],
 	recorder record.EventRecorder,
 	virtClient kubecli.KubevirtClient,
 	k8sClient kubernetes.Interface,
 	nodeStore cache.Store,
 	host string,
+	kubeletRoot string,
 	launcherClients launcherclients.LauncherClientsManager,
 	vmiInformer cache.SharedIndexInformer,
 	vmiGlobalStore cache.Store,
@@ -154,10 +156,6 @@ func NewVirtualMachineController(
 	hvMounter hotplugvolume.VolumeMounter,
 ) (*VirtualMachineController, error) {
 
-	queue := workqueue.NewTypedRateLimitingQueueWithConfig[string](
-		workqueue.DefaultTypedControllerRateLimiter[string](),
-		workqueue.TypedRateLimitingQueueConfig[string]{Name: "virt-handler-vm"},
-	)
 	logger := log.Log.With("controller", "vm")
 
 	hypervisorName := clusterConfig.GetHypervisor().Name
@@ -240,7 +238,7 @@ func NewVirtualMachineController(
 		deviceManager.PermanentHostDevicePlugins(c.hypervisorNodeInfo.GetHypervisorDevice(), maxDevices, permissions),
 		clusterConfig,
 		nodeStore)
-	c.heartBeat = heartbeat.NewHeartBeat(k8sClient.CoreV1(), c.deviceManagerController, clusterConfig, host)
+	c.heartBeat = heartbeat.NewHeartBeat(k8sClient.CoreV1(), c.deviceManagerController, clusterConfig, host, kubeletRoot)
 
 	return c, nil
 }
@@ -408,7 +406,10 @@ func (c *VirtualMachineController) execute(key string) error {
 		return nil
 	}
 
-	if vmiExists && vmi.IsMigrationSource() {
+	// Skip a migration source only while the migration is still ongoing. A decentralized
+	// source keeps IsMigrationSource()==true even once terminal, so without the IsFinal()
+	// guard sync() never runs and the source ghost record leaks - and MigrationSourceController never deletes it
+	if vmiExists && vmi.IsMigrationSource() && !vmi.IsFinal() {
 		c.logger.Object(vmi).V(4).Info("ignoring vmi as it is a migration source")
 		return nil
 	}

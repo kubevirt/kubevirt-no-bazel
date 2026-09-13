@@ -175,7 +175,6 @@ spec:
           - serviceaccounts
           - services
           - endpoints
-          - pods/exec
           verbs:
           - get
           - list
@@ -855,12 +854,6 @@ spec:
           - watch
           - get
         - apiGroups:
-          - k8s.cni.cncf.io
-          resources:
-          - network-attachment-definitions
-          verbs:
-          - get
-        - apiGroups:
           - kubevirt.io
           resources:
           - virtualmachineinstances
@@ -1505,6 +1498,12 @@ spec:
           - list
           - watch
           - deletecollection
+        - apiGroups:
+          - k8s.cni.cncf.io
+          resources:
+          - network-attachment-definitions
+          verbs:
+          - get
         - apiGroups:
           - authentication.k8s.io
           resources:

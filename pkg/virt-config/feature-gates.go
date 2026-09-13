@@ -115,10 +115,6 @@ func (config *ClusterConfig) VSOCKEnabled() bool {
 	return config.isFeatureGateEnabled(featuregate.VSOCKGate)
 }
 
-func (config *ClusterConfig) KubevirtSeccompProfileEnabled() bool {
-	return config.isFeatureGateEnabled(featuregate.KubevirtSeccompProfile)
-}
-
 func (config *ClusterConfig) MultiArchitectureEnabled() bool {
 	return config.isFeatureGateEnabled(featuregate.MultiArchitecture)
 }
@@ -187,10 +183,6 @@ func (config *ClusterConfig) PCINUMAAwareTopologyEnabled() bool {
 
 func (config *ClusterConfig) IncrementalBackupEnabled() bool {
 	return config.isFeatureGateEnabled(featuregate.IncrementalBackupGate)
-}
-
-func (config *ClusterConfig) ExternalNetResourceInjectionEnabled() bool {
-	return config.isFeatureGateEnabled(featuregate.ExternalNetResourceInjection)
 }
 
 func (config *ClusterConfig) RebootPolicyEnabled() bool {

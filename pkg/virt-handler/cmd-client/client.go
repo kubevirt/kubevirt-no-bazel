@@ -536,6 +536,7 @@ func (c *VirtLauncherClient) GetVMStats(request *cmdv1.VMStatsRequest) (*stats.V
 	result.GuestGetLoad = vmstatsResponse.GetGuestGetLoad().GetMessage()
 	result.GuestGetCpuStats = vmstatsResponse.GetGuestGetCpuStats().GetMessage()
 	result.GuestGetDiskStats = vmstatsResponse.GetGuestGetDiskStats().GetMessage()
+	result.GuestGetFsInfo = vmstatsResponse.GetGuestGetFsInfo().GetMessage()
 	result.GuestGetTime = vmstatsResponse.GetGuestGetTime().GetMessage()
 	result.GuestGetVcpus = vmstatsResponse.GetGuestGetVcpus().GetMessage()
 	result.GuestGetMemoryBlockInfo = vmstatsResponse.GetGuestGetMemoryBlockInfo().GetMessage()
@@ -547,6 +548,7 @@ func (c *VirtLauncherClient) GetVMStats(request *cmdv1.VMStatsRequest) (*stats.V
 	result.GuestNetworkGetRoute = vmstatsResponse.GetGuestNetworkGetRoute().GetMessage()
 	result.GuestNetworkGetInterfaces = vmstatsResponse.GetGuestNetworkGetInterfaces().GetMessage()
 	result.GuestGetMemoryBlocks = vmstatsResponse.GetGuestGetMemoryBlocks().GetMessage()
+	result.GuestGetDevices = vmstatsResponse.GetGuestGetDevices().GetMessage()
 
 	return result, err
 }

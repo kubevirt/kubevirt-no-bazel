@@ -1079,25 +1079,57 @@ var CRDsValidation map[string]string = map[string]string{
                   type: array
                   x-kubernetes-list-type: atomic
                 logVerbosity:
-                  description: LogVerbosity sets log verbosity level of  various components
+                  description: LogVerbosity sets log verbosity level of various components
                   properties:
                     nodeVerbosity:
                       additionalProperties:
                         type: integer
-                      description: NodeVerbosity represents a map of nodes with a
-                        specific verbosity level
+                      description: |-
+                        NodeVerbosity represents a map of node names to specific log verbosity levels.
+                        Allows overriding verbosity on specific nodes without altering cluster-wide settings.
+                        Changes take effect on the fly without triggering a pod restart.
                       type: object
                     virtAPI:
+                      description: |-
+                        VirtAPI specifies the log verbosity level for the virt-api deployment.
+                        A higher value increases the amount of logged information.
+                        Changes take effect on the fly without triggering a pod restart.
+                        Default: 2. Levels up to 9 produce progressively more detailed logs.
                       type: integer
                     virtController:
+                      description: |-
+                        VirtController specifies the log verbosity level for the virt-controller deployment.
+                        A higher value increases the amount of logged information.
+                        Changes take effect on the fly without triggering a pod restart.
+                        Default: 2. Levels up to 9 produce progressively more detailed logs.
                       type: integer
                     virtHandler:
+                      description: |-
+                        VirtHandler specifies the log verbosity level for the virt-handler DaemonSet.
+                        A higher value increases the amount of logged information.
+                        Changes take effect on the fly without triggering a pod restart.
+                        Default: 2. Levels up to 9 produce progressively more detailed logs.
                       type: integer
                     virtLauncher:
+                      description: |-
+                        VirtLauncher specifies the log verbosity level for virt-launcher pods managing VMI workloads.
+                        A higher value increases the amount of logged information.
+                        Changes apply to newly created virt-launcher pods. Existing pods retain their original verbosity.
+                        Default: 2. Levels up to 9 produce progressively more detailed logs.
                       type: integer
                     virtOperator:
+                      description: |-
+                        VirtOperator specifies the log verbosity level for the virt-operator deployment.
+                        A higher value increases the amount of logged information.
+                        Changes take effect on the fly without triggering a pod restart.
+                        Default: 2. Levels up to 9 produce progressively more detailed logs.
                       type: integer
                     virtSynchronizationController:
+                      description: |-
+                        VirtSynchronizationController specifies the log verbosity level for the virt-synchronization-controller component.
+                        A higher value increases the amount of logged information.
+                        Changes take effect on the fly without triggering a pod restart.
+                        Default: 2. Levels up to 9 produce progressively more detailed logs.
                       type: integer
                   type: object
                 memoryOvercommit:
@@ -6650,6 +6682,7 @@ var CRDsValidation map[string]string = map[string]string{
                                   none: Guest I/O not cached on the host, but may be kept in a disk cache.
                                   writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                                   writeback: Guest I/O cached on the host.
+                                  directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                                   Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                 type: string
                               cdrom:
@@ -9261,6 +9294,7 @@ var CRDsValidation map[string]string = map[string]string{
                           none: Guest I/O not cached on the host, but may be kept in a disk cache.
                           writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                           writeback: Guest I/O cached on the host.
+                          directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                           Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                         type: string
                       cdrom:
@@ -12861,6 +12895,7 @@ var CRDsValidation map[string]string = map[string]string{
                           none: Guest I/O not cached on the host, but may be kept in a disk cache.
                           writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                           writeback: Guest I/O cached on the host.
+                          directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                           Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                         type: string
                       cdrom:
@@ -17076,6 +17111,7 @@ var CRDsValidation map[string]string = map[string]string{
                           none: Guest I/O not cached on the host, but may be kept in a disk cache.
                           writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                           writeback: Guest I/O cached on the host.
+                          directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                           Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                         type: string
                       cdrom:
@@ -19669,6 +19705,7 @@ var CRDsValidation map[string]string = map[string]string{
                                   none: Guest I/O not cached on the host, but may be kept in a disk cache.
                                   writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                                   writeback: Guest I/O cached on the host.
+                                  directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                                   Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                 type: string
                               cdrom:
@@ -24838,6 +24875,7 @@ var CRDsValidation map[string]string = map[string]string{
                                           none: Guest I/O not cached on the host, but may be kept in a disk cache.
                                           writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                                           writeback: Guest I/O cached on the host.
+                                          directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                                           Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                         type: string
                                       cdrom:
@@ -30516,6 +30554,7 @@ var CRDsValidation map[string]string = map[string]string{
                                               none: Guest I/O not cached on the host, but may be kept in a disk cache.
                                               writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                                               writeback: Guest I/O cached on the host.
+                                              directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                                               Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                             type: string
                                           cdrom:
@@ -33206,6 +33245,7 @@ var CRDsValidation map[string]string = map[string]string{
                                       none: Guest I/O not cached on the host, but may be kept in a disk cache.
                                       writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
                                       writeback: Guest I/O cached on the host.
+                                      directsync: Guest I/O bypasses the host page cache and is written to the physical medium synchronously.
                                       Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                     type: string
                                   cdrom:

@@ -54,7 +54,6 @@ import (
 	"kubevirt.io/kubevirt/pkg/hooks"
 	"kubevirt.io/kubevirt/pkg/network/downwardapi"
 	"kubevirt.io/kubevirt/pkg/network/istio"
-	"kubevirt.io/kubevirt/pkg/network/multus"
 	"kubevirt.io/kubevirt/pkg/network/vmispec"
 	backendstorage "kubevirt.io/kubevirt/pkg/storage/backend-storage"
 	"kubevirt.io/kubevirt/pkg/storage/reservation"
@@ -111,7 +110,8 @@ const LibvirtStartupDelay = 10
 
 const IntelVendorName = "Intel"
 
-const ENV_VAR_POD_NAME = "POD_NAME"
+const envVarPodName = "POD_NAME"
+const envVarVirtiofsDebugLogs = "VIRTIOFSD_DEBUG_LOGS"
 
 const ephemeralStorageOverheadSize = "50M"
 
@@ -410,15 +410,7 @@ func (t *TemplateService) renderLaunchManifest(vmi *v1.VirtualMachineInstance, i
 		})
 	}
 
-	var networkToResourceMap map[string]string
-	if !t.clusterConfig.ExternalNetResourceInjectionEnabled() {
-		var err error
-		networkToResourceMap, err = multus.NetworkToResource(t.virtClient, vmi)
-		if err != nil {
-			return nil, err
-		}
-	}
-	resourceRenderer, err := t.newResourceRenderer(vmi, networkToResourceMap, memoryOverhead)
+	resourceRenderer, err := t.newResourceRenderer(vmi, memoryOverhead)
 	if err != nil {
 		return nil, err
 	}
@@ -525,11 +517,11 @@ func (t *TemplateService) renderLaunchManifest(vmi *v1.VirtualMachineInstance, i
 		compute.Env = append(compute.Env, k8sv1.EnvVar{Name: util.ENV_VAR_LIBVIRT_DEBUG_LOGS, Value: "1"})
 	}
 	if labelValue, ok := vmi.Labels[virtiofsDebugLogs]; (ok && strings.EqualFold(labelValue, "true")) || virtLauncherLogVerbosity > util.EXT_LOG_VERBOSITY_THRESHOLD {
-		compute.Env = append(compute.Env, k8sv1.EnvVar{Name: util.ENV_VAR_VIRTIOFSD_DEBUG_LOGS, Value: "1"})
+		compute.Env = append(compute.Env, k8sv1.EnvVar{Name: envVarVirtiofsDebugLogs, Value: "1"})
 	}
 
 	compute.Env = append(compute.Env, k8sv1.EnvVar{
-		Name: ENV_VAR_POD_NAME,
+		Name: envVarPodName,
 		ValueFrom: &k8sv1.EnvVarSource{
 			FieldRef: &k8sv1.ObjectFieldSelector{
 				FieldPath: "metadata.name",
@@ -867,6 +859,9 @@ func newSidecarContainerRenderer(sidecarName string, vmiSpec *v1.VirtualMachineI
 		})
 	}
 
+	// resources already contains the CPU and memory spec of the sidecar container
+	// add the DRA ResourceClaims as well
+	resources.Claims = requestedHookSidecar.ResourceClaims
 	sidecarOpts := []Option{
 		WithCommand(requestedHookSidecar.Command),
 		WithResourceRequirements(resources),
@@ -1004,7 +999,7 @@ func (t *TemplateService) newVolumeRenderer(vmi *v1.VirtualMachineInstance, imag
 	return volumeRenderer, nil
 }
 
-func (t *TemplateService) newResourceRenderer(vmi *v1.VirtualMachineInstance, networkToResourceMap map[string]string, memoryOverhead resource.Quantity) (*ResourceRenderer, error) {
+func (t *TemplateService) newResourceRenderer(vmi *v1.VirtualMachineInstance, memoryOverhead resource.Quantity) (*ResourceRenderer, error) {
 	vmiResources := vmi.Spec.Domain.Resources
 	hypervisorResource := ConstructHypervisorResourceName(t.launcherHypervisorResources)
 	baseOptions := []ResourceRendererOption{
@@ -1016,7 +1011,7 @@ func (t *TemplateService) newResourceRenderer(vmi *v1.VirtualMachineInstance, ne
 		return nil, err
 	}
 
-	options := append(baseOptions, t.VMIResourcePredicates(vmi, networkToResourceMap, memoryOverhead).Apply()...)
+	options := append(baseOptions, t.VMIResourcePredicates(vmi, memoryOverhead).Apply()...)
 	return NewResourceRenderer(vmiResources.Limits, vmiResources.Requests, options...), nil
 }
 
@@ -1162,10 +1157,14 @@ func (t *TemplateService) RenderHotplugAttachmentPodTemplate(volumes []*v1.Volum
 		if claimName == "" {
 			continue
 		}
-		skipMount := false
-		if hotplugVolumeStatusMap[volume.Name] == v1.VolumeReady || hotplugVolumeStatusMap[volume.Name] == v1.HotplugVolumeMounted {
-			skipMount = true
-		}
+		// Skip container mounts for regular hotplug volumes already served by the old
+		// attachment pod (VolumeReady or HotplugVolumeMounted). Utility volumes always
+		// need a mount in the replacement pod so virt-handler can bind-mount when the
+		// volume set expands. Skipping during HotplugVolumeMounted avoids duplicate
+		// container mounts on overlapping attachment pods (same node as virt-launcher)
+		// while the disk is still attaching via the old pod.
+		phase := hotplugVolumeStatusMap[volume.Name]
+		skipMount := !types.IsUtilityVolume(vmi, volume.Name) && (phase == v1.VolumeReady || phase == v1.HotplugVolumeMounted)
 		pod.Spec.Volumes = append(pod.Spec.Volumes, k8sv1.Volume{
 			Name: volume.Name,
 			VolumeSource: k8sv1.VolumeSource{
@@ -1621,7 +1620,7 @@ func (t *TemplateService) doesVMIRequireAutoCPULimits(vmi *v1.VirtualMachineInst
 	return false
 }
 
-func (t *TemplateService) VMIResourcePredicates(vmi *v1.VirtualMachineInstance, networkToResourceMap map[string]string, memoryOverhead resource.Quantity) VMIResourcePredicates {
+func (t *TemplateService) VMIResourcePredicates(vmi *v1.VirtualMachineInstance, memoryOverhead resource.Quantity) VMIResourcePredicates {
 	withCPULimits := t.doesVMIRequireAutoCPULimits(vmi)
 	additionalCPUs := uint32(0)
 	if vmi.Spec.Domain.IOThreadsPolicy != nil &&
@@ -1640,9 +1639,6 @@ func (t *TemplateService) VMIResourcePredicates(vmi *v1.VirtualMachineInstance, 
 			NewVMIResourceRule(hasHugePages, WithHugePages(vmi.Spec.Domain.Memory, memoryOverhead)),
 			NewVMIResourceRule(not(hasHugePages), WithMemoryOverhead(vmi.Spec.Domain.Resources, memoryOverhead)),
 			NewVMIResourceRule(t.doesVMIRequireAutoMemoryLimits, WithAutoMemoryLimits(vmi.Namespace, t.namespaceStore)),
-			NewVMIResourceRule(func(*v1.VirtualMachineInstance) bool {
-				return len(networkToResourceMap) > 0
-			}, WithNetworkResources(networkToResourceMap)),
 			NewVMIResourceRule(isGPUVMIDevicePlugins, WithGPUsDevicePlugins(vmi.Spec.Domain.Devices.GPUs)),
 			NewVMIResourceRule(func(vmi *v1.VirtualMachineInstance) bool {
 				return t.clusterConfig.GPUsWithDRAGateEnabled() && isGPUVMIDRA(vmi)

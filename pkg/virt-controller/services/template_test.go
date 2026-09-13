@@ -69,7 +69,11 @@ import (
 	"kubevirt.io/kubevirt/tools/vms-generator/utils"
 )
 
-var testHookSidecar = hooks.HookSidecar{Image: "test-image", ImagePullPolicy: "test-policy"}
+var testHookSidecar = hooks.HookSidecar{
+	Image:           "test-image",
+	ImagePullPolicy: "test-policy",
+	ResourceClaims:  []k8sv1.ResourceClaim{{Name: "test-claim", Request: "test-req"}},
+}
 
 var _ = Describe("Template", func() {
 	const expectedNetworkResource = "amazing-network-resource.com"
@@ -611,7 +615,7 @@ var _ = Describe("Template", func() {
 
 				hasPodNameEnvVar := false
 				for _, ev := range pod.Spec.Containers[0].Env {
-					if ev.Name == ENV_VAR_POD_NAME && ev.ValueFrom.FieldRef.FieldPath == "metadata.name" {
+					if ev.Name == envVarPodName && ev.ValueFrom.FieldRef.FieldPath == "metadata.name" {
 						hasPodNameEnvVar = true
 						break
 					}
@@ -3252,6 +3256,8 @@ var _ = Describe("Template", func() {
 				Name:  hooks.ContainerNameEnvVar,
 				Value: "hook-sidecar-0",
 			}))
+
+			Expect(pod.Spec.Containers[1].Resources.Claims).To(Equal(testHookSidecar.ResourceClaims))
 		})
 
 		Context("with pod networking", func() {
@@ -4821,6 +4827,80 @@ var _ = Describe("Template", func() {
 			Expect(pod.Spec.Tolerations).To(BeEquivalentTo(vmi.Spec.Tolerations))
 		})
 
+		DescribeTable("should mount filesystem hotplug volumes based on volume phase",
+			func(phase v1.VolumePhase, isUtility bool, expectVolumeMount bool) {
+				vmi := api.NewMinimalVMI("fake-vmi")
+				if isUtility {
+					vmi.Spec.UtilityVolumes = []v1.UtilityVolume{
+						{
+							Name: "testVolume",
+							PersistentVolumeClaimVolumeSource: k8sv1.PersistentVolumeClaimVolumeSource{
+								ClaimName: "pvcDevice",
+							},
+						},
+					}
+				}
+				vmi.Status.VolumeStatus = []v1.VolumeStatus{
+					{
+						Name:          "testVolume",
+						Phase:         phase,
+						HotplugVolume: &v1.HotplugVolumeStatus{},
+					},
+				}
+				ownerPod, err := svc.RenderLaunchManifest(vmi)
+				Expect(err).ToNot(HaveOccurred())
+
+				vmi.Status.SelinuxContext = "test_u:test_r:test_t:s0"
+
+				volumeName := "testVolume"
+				pvcName := "pvcDevice"
+				namespace := "testns"
+				mode := k8sv1.PersistentVolumeFilesystem
+				pvc := k8sv1.PersistentVolumeClaim{
+					TypeMeta:   metav1.TypeMeta{Kind: "PersistentVolumeClaim", APIVersion: "v1"},
+					ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: pvcName},
+					Spec: k8sv1.PersistentVolumeClaimSpec{
+						VolumeMode: &mode,
+					},
+				}
+				claimMap := map[string]*k8sv1.PersistentVolumeClaim{volumeName: &pvc}
+				volumes := []*v1.Volume{
+					{
+						Name: volumeName,
+						VolumeSource: v1.VolumeSource{
+							PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
+								PersistentVolumeClaimVolumeSource: k8sv1.PersistentVolumeClaimVolumeSource{
+									ClaimName: pvcName,
+								},
+							},
+						},
+					},
+				}
+
+				pod, err := svc.RenderHotplugAttachmentPodTemplate(volumes, ownerPod, vmi, claimMap)
+				Expect(err).ToNot(HaveOccurred())
+
+				prop := k8sv1.MountPropagationHostToContainer
+				expectedMounts := []k8sv1.VolumeMount{
+					{
+						Name:             "hotplug-disks",
+						MountPath:        "/path",
+						MountPropagation: &prop,
+					},
+				}
+				if expectVolumeMount {
+					expectedMounts = append(expectedMounts, k8sv1.VolumeMount{
+						Name:      volumeName,
+						MountPath: "/" + volumeName,
+					})
+				}
+				Expect(pod.Spec.Containers[0].VolumeMounts).To(Equal(expectedMounts))
+			},
+			Entry("utility volume at HotplugVolumeMounted", v1.HotplugVolumeMounted, true, true),
+			Entry("regular hotplug volume at HotplugVolumeMounted", v1.HotplugVolumeMounted, false, false),
+			Entry("regular hotplug volume at VolumeReady", v1.VolumeReady, false, false),
+		)
+
 		It("should compute the correct volumeDevice context when rendering hotplug attachment pods with the FS PersistentVolumeClaim", func() {
 			vmi := api.NewMinimalVMI("fake-vmi")
 			ownerPod, err := svc.RenderLaunchManifest(vmi)
@@ -6263,49 +6343,6 @@ var _ = Describe("Template", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			Expect(pod.Annotations).To(HaveKeyWithValue(sharedKey, val2))
-		})
-	})
-
-	Context("NAD query disablement", func() {
-		It("Should not query NAD when ExternalNetResourceInjection is enabled", func() {
-			config, kvStore, svc = configFactory(defaultArch)
-			enableFeatureGate(featuregate.ExternalNetResourceInjection)
-
-			svc = NewTemplateService("kubevirt/virt-launcher",
-				240,
-				"/var/run/kubevirt",
-				"/var/run/kubevirt-ephemeral-disks",
-				"/var/run/kubevirt/container-disks",
-				v1.HotplugDiskDir,
-				"pull-secret-1",
-				pvcCache,
-				virtClient,
-				config,
-				qemuGid,
-				"kubevirt/vmexport",
-				resourceQuotaStore,
-				namespaceStore,
-			)
-
-			const netName = "net1"
-
-			vmi := libvmi.New(
-				libvmi.WithNamespace("other-namespace"),
-				libvmi.WithInterface(libvmi.InterfaceDeviceWithBridgeBinding(netName)),
-				libvmi.WithNetwork(libvmi.MultusNetwork(netName, "test1")),
-			)
-
-			pod, err := svc.RenderLaunchManifest(vmi)
-			Expect(err).ToNot(HaveOccurred())
-
-			computeContainer := pod.Spec.Containers[0]
-			Expect(computeContainer.Name).To(Equal("compute"))
-
-			_, reqExists := computeContainer.Resources.Requests[expectedNetworkResource]
-			Expect(reqExists).To(BeFalse())
-
-			_, limExists := computeContainer.Resources.Limits[expectedNetworkResource]
-			Expect(limExists).To(BeFalse())
 		})
 	})
 

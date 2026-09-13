@@ -82,6 +82,16 @@ tests:
               kubernetes_operator_part_of: "kubevirt"
               kubernetes_operator_component: "kubevirt"
               namespace: "ci"
+      # NoReady must not overlap with Down when there are no running pods
+      - eval_time: 10m
+        alertname: NoReadyVirtAPI
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NoReadyVirtController
+        exp_alerts: [ ]
+      - eval_time: 10m
+        alertname: NoReadyVirtHandler
+        exp_alerts: [ ]
       # it must trigger when operators are not healthy
       - eval_time: 16m
         alertname: VirtAPIDown
@@ -131,6 +141,15 @@ tests:
               kubernetes_operator_part_of: "kubevirt"
               kubernetes_operator_component: "kubevirt"
               namespace: "ci"
+      - eval_time: 16m
+        alertname: NoReadyVirtAPI
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: NoReadyVirtController
+        exp_alerts: [ ]
+      - eval_time: 16m
+        alertname: NoReadyVirtHandler
+        exp_alerts: [ ]
       # it must not trigger when operators are healthy
       - eval_time: 17m
         alertname: VirtAPIDown
@@ -394,6 +413,9 @@ tests:
               kubernetes_operator_component: "kubevirt"
               namespace: "ci"
       - eval_time: 10m
+        alertname: VirtAPIDown
+        exp_alerts: [ ]
+      - eval_time: 10m
         alertname: LowReadyVirtAPICount
         exp_alerts: [ ]
 
@@ -454,6 +476,9 @@ tests:
               kubernetes_operator_component: "kubevirt"
               namespace: "ci"
       - eval_time: 10m
+        alertname: VirtHandlerDown
+        exp_alerts: [ ]
+      - eval_time: 10m
         alertname: LowReadyVirtHandlerCount
         exp_alerts: [ ]
 
@@ -485,26 +510,34 @@ tests:
               kubernetes_operator_component: "kubevirt"
               namespace: "ci"
       - eval_time: 10m
+        alertname: VirtControllerDown
+        exp_alerts: [ ]
+      - eval_time: 10m
         alertname: LowReadyVirtControllersCount
         exp_alerts: [ ]
 
-  # All virt controllers are not ready (ImagePullBackOff)
+  # ImagePullBackOff: no running pods is Down, not NoReady
   - interval: 1m
     input_series:
       - series: 'kubevirt_virt_controller_ready_status{namespace="ci", pod="virt-controller-1"}'
         values: "stale stale stale stale stale stale stale stale stale stale"
 
     alert_rule_test:
-      # no alert before 10 minutes
       - eval_time: 9m
         alertname: NoReadyVirtController
         exp_alerts: [ ]
+      - eval_time: 9m
+        alertname: VirtControllerDown
+        exp_alerts: [ ]
       - eval_time: 10m
         alertname: NoReadyVirtController
+        exp_alerts: [ ]
+      - eval_time: 10m
+        alertname: VirtControllerDown
         exp_alerts:
           - exp_annotations:
-              summary: "No ready virt-controller was detected for the last 10 min."
-              runbook_url: "https://kubevirt.io/monitoring/runbooks/NoReadyVirtController"
+              summary: "No running virt-controller was detected for the last 10 min."
+              runbook_url: "https://kubevirt.io/monitoring/runbooks/VirtControllerDown"
             exp_labels:
               severity: "critical"
               operator_health_impact: "critical"
@@ -903,6 +936,28 @@ tests:
 
     alert_rule_test:
       - eval_time: 5m
+        alertname: LowKVMNodesCount
+        exp_alerts: []
+
+  # Single node with KVM (SNO) - must not fire; live migration is not expected
+  - interval: 1m
+    input_series:
+      - series: 'kube_node_status_allocatable{resource="devices_kubevirt_io_kvm", node="sno"}'
+        values: "110 110 110 110 110 110"
+
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LowKVMNodesCount
+        exp_alerts: []
+
+  # Single node without KVM (SNO) - must not fire; the rule requires allocatable nodes > 1
+  - interval: 1m
+    input_series:
+      - series: 'kube_node_status_allocatable{resource="devices_kubevirt_io_kvm", node="sno"}'
+        values: "0 0 0 0 0 0 0"
+
+    alert_rule_test:
+      - eval_time: 6m
         alertname: LowKVMNodesCount
         exp_alerts: []
 
@@ -1902,6 +1957,78 @@ tests:
       - eval_time: 3m
         alertname: GuestFilesystemAlmostOutOfSpace
         exp_alerts: []
+
+  # GuestFilesystemAlmostOutOfSpace - Exclusions: Windows CDROM (CDFS) should be excluded
+  # QEMU Guest Agent reports ISO 9660 optical media as CDFS with 0 bytes free.
+  - interval: 1m
+    input_series:
+      - series: 'kubevirt_vmi_filesystem_capacity_bytes{name="win-vm", namespace="test-ns", disk_name="cdrom", mount_point="D:\\", file_system_type="CDFS"}'
+        values: "100x10"
+      - series: 'kubevirt_vmi_filesystem_used_bytes{name="win-vm", namespace="test-ns", disk_name="cdrom", mount_point="D:\\", file_system_type="CDFS"}'
+        values: "100 100 100 100 100 100 100 100 100 100"
+
+    alert_rule_test:
+      # at 3m: usage = 100% -> would normally alert, but CDFS optical media is excluded
+      - eval_time: 3m
+        alertname: GuestFilesystemAlmostOutOfSpace
+        exp_alerts: []
+
+  # GuestFilesystemAlmostOutOfSpace - Exclusions: Windows CDROM (UDF) should be excluded
+  # Windows GetVolumeInformation reports UDF in uppercase; the exclusion must be case-insensitive.
+  - interval: 1m
+    input_series:
+      - series: 'kubevirt_vmi_filesystem_capacity_bytes{name="win-vm", namespace="test-ns", disk_name="cdrom", mount_point="D:\\", file_system_type="UDF"}'
+        values: "100x10"
+      - series: 'kubevirt_vmi_filesystem_used_bytes{name="win-vm", namespace="test-ns", disk_name="cdrom", mount_point="D:\\", file_system_type="UDF"}'
+        values: "100 100 100 100 100 100 100 100 100 100"
+
+    alert_rule_test:
+      # at 3m: usage = 100% -> would normally alert, but UDF optical media is excluded
+      - eval_time: 3m
+        alertname: GuestFilesystemAlmostOutOfSpace
+        exp_alerts: []
+
+  # GuestFilesystemAlmostOutOfSpace - Exclusions: Linux iso9660 CDROM should be excluded
+  - interval: 1m
+    input_series:
+      - series: 'kubevirt_vmi_filesystem_capacity_bytes{name="linux-vm", namespace="test-ns", disk_name="sr0", mount_point="/mnt/cdrom", file_system_type="iso9660"}'
+        values: "100x10"
+      - series: 'kubevirt_vmi_filesystem_used_bytes{name="linux-vm", namespace="test-ns", disk_name="sr0", mount_point="/mnt/cdrom", file_system_type="iso9660"}'
+        values: "100 100 100 100 100 100 100 100 100 100"
+
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GuestFilesystemAlmostOutOfSpace
+        exp_alerts: []
+
+  # GuestFilesystemAlmostOutOfSpace - Windows NTFS data disk at 100% must still alert
+  - interval: 1m
+    input_series:
+      - series: 'kubevirt_vmi_filesystem_capacity_bytes{name="win-vm", namespace="test-ns", disk_name="sda2", mount_point="C:\\", file_system_type="NTFS"}'
+        values: "100x10"
+      - series: 'kubevirt_vmi_filesystem_used_bytes{name="win-vm", namespace="test-ns", disk_name="sda2", mount_point="C:\\", file_system_type="NTFS"}'
+        values: "100 100 100 100 100 100 100 100 100 100"
+
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GuestFilesystemAlmostOutOfSpace
+        exp_alerts:
+          - exp_annotations:
+              summary: "Guest filesystem is critically low on space"
+              description: "VirtualMachineInstance win-vm in namespace test-ns has filesystem sda2 (C:\\) usage above 95% (current: 100%)."
+              runbook_url: "https://kubevirt.io/monitoring/runbooks/GuestFilesystemAlmostOutOfSpace"
+            exp_labels:
+              severity: "critical"
+              operator_health_impact: "none"
+              kubernetes_operator_part_of: "kubevirt"
+              kubernetes_operator_component: "kubevirt"
+              name: "win-vm"
+              vm: "win-vm"
+              namespace: "test-ns"
+              disk_name: "sda2"
+              mount_point: "C:\\"
+              file_system_type: "NTFS"
+
   # VM memory pressure with swap activity
   - interval: 1m
     input_series:
@@ -2114,6 +2241,61 @@ tests:
         alertname: LowVirtOperatorCount
         exp_alerts: []
 
+  # SNO: a single desired replica that is running must not fire LowVirt*Count
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_status_phase{namespace="ci", pod="virt-api-1", phase="Running"}'
+        values: '1+0x61'
+      - series: 'kube_deployment_spec_replicas{deployment="virt-api", namespace="ci"}'
+        values: '1+0x61'
+
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LowVirtAPICount
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_status_phase{namespace="ci", pod="virt-controller-1", phase="Running"}'
+        values: '1+0x11'
+      - series: 'kube_deployment_spec_replicas{deployment="virt-controller", namespace="ci"}'
+        values: '1+0x11'
+
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LowVirtControllersCount
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_status_phase{namespace="ci", pod="virt-operator-1", phase="Running"}'
+        values: '1+0x61'
+      - series: 'kube_deployment_spec_replicas{deployment="virt-operator", namespace="ci"}'
+        values: '1+0x61'
+
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LowVirtOperatorCount
+        exp_alerts: []
+
+  # SNO + extra worker: desired replicas stay 1. Extra nodes must not fire
+  # LowVirtAPICount because the expression uses spec.replicas, not node count.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_status_phase{namespace="ci", pod="virt-api-1", phase="Running"}'
+        values: '1+0x61'
+      - series: 'kube_deployment_spec_replicas{deployment="virt-api", namespace="ci"}'
+        values: '1+0x61'
+      - series: 'kube_node_status_allocatable{resource="cpu", node="sno"}'
+        values: '8+0x61'
+      - series: 'kube_node_status_allocatable{resource="cpu", node="worker"}'
+        values: '8+0x61'
+
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LowVirtAPICount
+        exp_alerts: []
+
   # VM non-recoverable OS panic
   - interval: 1m
     input_series:
@@ -2155,7 +2337,7 @@ tests:
         values: "5368709120 5368709120 5368709120"
       - series: 'kube_persistentvolumeclaim_info{namespace="ns-test", persistentvolumeclaim="pod-disk"}'
         values: "1 1 1"
-      - series: 'kube_pod_spec_volumes_persistentvolumeclaims{namespace="ns-test", persistentvolumeclaim="pod-disk", pod="some-pod"}'
+      - series: 'kube_pod_spec_volumes_persistentvolumeclaims_info{namespace="ns-test", persistentvolumeclaim="pod-disk", pod="some-pod"}'
         values: "1 1 1"
       - series: 'kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace="ns-test", persistentvolumeclaim="pod-disk"}'
         values: "5368709120 5368709120 5368709120"
