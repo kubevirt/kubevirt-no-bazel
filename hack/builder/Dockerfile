@@ -7,6 +7,8 @@ ARG ENVTEST_K8S_VERSION=1.37.0
 ARG SETUP_ENVTEST_VERSION=v0.24.1
 
 ENV BAZEL_VERSION=7.5.0
+# Keep in sync with the bazeldnf http_archive in WORKSPACE (hack/verify-rpm-deps.sh checks this).
+ENV BAZELDNF_VERSION=v0.5.9-2
 ENV GIMME_GO_VERSION=1.26.6
 ENV OPERATOR_COURIER_VERSION=2.1.11
 ENV SONOBUOY_VERSION=0.56.9
@@ -144,6 +146,17 @@ RUN if test "${ARCH}" != "s390x"; then \
        curl -L -o /usr/bin/bazel https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-${BAZEL_ARCH} && \
        chmod u+x /usr/bin/bazel; \
     fi
+
+# Standalone bazeldnf for hack/rpm-deps.sh and hack/verify-rpm-deps.sh
+RUN case "${ARCH}" in \
+        amd64) sha256=e78b730e5f9d1edeb7b54e7414e8c094820056eb838f58a235763b63df3f5c41 ;; \
+        arm64) sha256=46d98eefc3bb09b5559140b8c65a128742d6ec0bddc3d4f8851b8eee5de9b660 ;; \
+        s390x) sha256=6ab0e13093d6dfbf5234cd935c24615de4658b17afc787542e62f8eaf5e3ccc7 ;; \
+        *) echo "no bazeldnf binary for ${ARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -sSfL -o /usr/bin/bazeldnf https://github.com/brianmcarey/bazeldnf/releases/download/${BAZELDNF_VERSION}/bazeldnf-${BAZELDNF_VERSION}-linux-${ARCH} && \
+    echo "${sha256}  /usr/bin/bazeldnf" | sha256sum -c - && \
+    chmod +x /usr/bin/bazeldnf
 
 # Add /root/go/src/kubevirt.io/kubevirt and mark it as a safe directory for git
 RUN mkdir -p /root/go/src/kubevirt.io/kubevirt && git config --global --add safe.directory /root/go/src/kubevirt.io/kubevirt
