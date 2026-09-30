@@ -3,8 +3,9 @@
 filters:
   ".*":
     reviewers:
-      - code-reviewers
+      - kubevirt-no-bazel-reviewers
     approvers:
+      - kubevirt-no-bazel-approvers
       - approvers
     emeritus_approvers:
       - emeritus_approvers
