@@ -1,16 +1,21 @@
 aliases:
-  approvers:
-    - davidvossel
-    - vladikr
-    - rmohr
-    - stu-gott
-    - fabiand
-    - jean-edouard
-    - mhenriks
-    - enp0s3
-    - xpivarc
-    - vasiliy-ul
-    - iholder101
+  #
+  # kubevirt-no-bazel
+  # This fork only lists the people working on it (VEP #392). The other
+  # aliases keep their names so the per-directory OWNERS files still
+  # resolve; empty ones fall back to the root OWNERS.
+  #
+  kubevirt-no-bazel-reviewers:
+    - jschintag
+    - Whitedyl
+  kubevirt-no-bazel-approvers:
+    - jschintag
+    - Whitedyl
+    - brianmcarey
+    - dhiller
+    - dollierp
+
+  approvers: []
   emeritus_approvers:
     - danielBelenky
     - mazzystr
@@ -25,32 +30,14 @@ aliases:
     - AlonaKaplan
     - acardace
     - alicefr # 2025-06-04
-  code-reviewers:
-    - vladikr
-    - enp0s3
-    - jean-edouard
-    - mhenriks
-    - EdDev
-    - 0xFelix
-    - lyarwood
-    - fossedihelm
-    - victortoso
+  code-reviewers: []
 
   #
   # SIG Test
   #
-  sig-test-reviewers:
-    - enp0s3
-    - 0xFelix
-    - orelmisan
+  sig-test-reviewers: []
   sig-test-approvers:
-    - akalenyu
-    - kbidarkar
-    - phoracek
-    - enp0s3
     - dhiller
-    - 0xFelix
-    - orelmisan
   sig-test-emeritus_approvers:
     - AlonaKaplan
 
@@ -58,14 +45,8 @@ aliases:
   # SIG Network
   # Owns anything related to networking.
   #
-  sig-network-reviewers:
-    - EdDev
-    - RamLavi
-    - ormergi
-    - orelmisan
-  sig-network-approvers:
-    - EdDev
-    - orelmisan
+  sig-network-reviewers: []
+  sig-network-approvers: []
   sig-network-emeritus_approvers:
     - AlonaKaplan
 
@@ -73,26 +54,15 @@ aliases:
   # SIG Scale
   # Owns to keep kubevirt's scalability comparable to Kubernetes'.
   #
-  sig-scale-approvers:
-    - rthallisey
-  sig-scale-reviewers:
-    - rthallisey
+  sig-scale-approvers: []
+  sig-scale-reviewers: []
 
   #
   # SIG Storage
   # Owns anything related to storage.
   #
-  sig-storage-approvers:
-    - mhenriks
-    - akalenyu
-    - ShellyKa13
-    - awels
-  sig-storage-reviewers:
-    - awels
-    - akalenyu
-    - ShellyKa13
-    - alromeros
-    - Acedus
+  sig-storage-approvers: []
+  sig-storage-reviewers: []
   sig-storage-emeritus_approvers:
     - alicefr
 
@@ -110,71 +80,37 @@ aliases:
   # (but not limited to) groups, SELinux, node labels, …
   # And everything on the cluster level such as RBAC, controller, …
   #
-  sig-compute-approvers:
-    - Barakmor1
-    - jean-edouard
-    - iholder101
-    - fossedihelm
-    - 0xFelix
-    - vladikr
-    - enp0s3
-    - orelmisan
-  sig-compute-reviewers:
-    - victortoso
-    - fossedihelm
-    - lyarwood
-    - 0xFelix
-    - Barakmor1
-    - dasionov
-    - orelmisan
+  sig-compute-approvers: []
+  sig-compute-reviewers: []
 
   # SIG Compute cgroup sub project
   # Owns cgroup related packages.
-  sig-compute-cgroup-approvers:
-    - akalenyu
-    - iholder101
+  sig-compute-cgroup-approvers: []
 
   # SIG Compute Instance types sub project
   # Responsible the overall instance type feature set within SIG Compute
-  sig-compute-instancetype-approvers:
-    - lyarwood
-    - 0xFelix
-  sig-compute-instancetype-reviewers:
-    - akrejcir
+  sig-compute-instancetype-approvers: []
+  sig-compute-instancetype-reviewers: []
 
   # SIG Compute virtctl sub project
   # Responsible for virtctl within SIG Compute
-  sig-compute-virtctl-approvers:
-    - 0xFelix
-    - fossedihelm
-  sig-compute-virtctl-reviewers:
-    - oshoval
-    - lyarwood
+  sig-compute-virtctl-approvers: []
+  sig-compute-virtctl-reviewers: []
 
   #
   # SIG Observability
   # Owns the responsibility to keep kubevirt observable by i.e.
   # having mertics, alters, and runbooks.
   #
-  sig-observability-approvers:
-    - sradco
-    - machadovilaca
-    - avlitman
-  sig-observability-reviewers:
-    - machadovilaca
-    - avlitman
-    - nunnatsa
-    - orenc1
+  sig-observability-approvers: []
+  sig-observability-reviewers: []
 
   #
   # SIG Release
   # Owns the release process, including the schedule, and tools.
   #
-  sig-release-approvers:
-    - fossedihelm
-  sig-release-reviewers:
-    - fossedihelm
-    - xpivarc
+  sig-release-approvers: []
+  sig-release-reviewers: []
 
   #
   # SIG Buildsystem
@@ -183,11 +119,7 @@ aliases:
   sig-buildsystem-approvers:
     - brianmcarey
     - dhiller
-  sig-buildsystem-reviewers:
-    - brianmcarey
-    - dollierp
-    - enp0s3
-    - xpivarc
+  sig-buildsystem-reviewers: []
 
   #
   # SIG Architecture
@@ -201,13 +133,5 @@ aliases:
   # SIG Control plane
   # Responsible for the development and enhancement of
   # KubeVirt control plane.
-  sig-control-plane-approvers:
-    - xpivarc
-  sig-control-plane-reviewers:
-    - akalenyu
-    - Barakmor1
-    - dasionov
-    - lyarwood
-    - mhenriks
-    - orelmisan
-    - xpivarc
+  sig-control-plane-approvers: []
+  sig-control-plane-reviewers: []
