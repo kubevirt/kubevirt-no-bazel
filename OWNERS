@@ -3,9 +3,9 @@
 filters:
   ".*":
     reviewers:
-      - code-reviewers
+      - kubevirt-no-bazel-reviewers
     approvers:
-      - approvers
+      - kubevirt-no-bazel-approvers
     emeritus_approvers:
       - emeritus_approvers
   "BUILD\\.bazel|.*\\.bzl|WORKSPACE|Makefile|\\.bazelrc|ci\\.bazelrc|\\.bazelversion|nogo_config\\.json":
