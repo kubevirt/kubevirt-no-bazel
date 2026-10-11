@@ -39,16 +39,16 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/controller"
 	diskutils "kubevirt.io/kubevirt/pkg/ephemeral-disk-utils"
-	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
 	"kubevirt.io/kubevirt/pkg/libvmi"
 	"kubevirt.io/kubevirt/pkg/safepath"
+	hostdisk "kubevirt.io/kubevirt/pkg/storage/host-disk"
+	"kubevirt.io/kubevirt/pkg/storage/virtiofs"
 	"kubevirt.io/kubevirt/pkg/util"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
 	"kubevirt.io/kubevirt/pkg/virt-handler/isolation"
 	launcherclients "kubevirt.io/kubevirt/pkg/virt-handler/launcher-clients"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
-	"kubevirt.io/kubevirt/pkg/virtiofs"
 	"kubevirt.io/kubevirt/pkg/vmitrait"
 )
 
@@ -329,7 +329,7 @@ func (c *BaseController) setupDevicesOwnerships(vmi *v1.VirtualMachineInstance, 
 		return fmt.Errorf("failed to set up file ownership for /dev/%s: %v", hypervisorDevice, err)
 	}
 
-	if util.IsAutoAttachVSOCK(vmi) {
+	if vmitrait.IsAutoAttachVSOCK(vmi) {
 		if err := c.claimDeviceOwnership(virtLauncherRootMount, "vhost-vsock"); err != nil {
 			return fmt.Errorf("failed to set up file ownership for /dev/vhost-vsock: %v", err)
 		}

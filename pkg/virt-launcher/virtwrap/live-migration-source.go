@@ -35,14 +35,15 @@ import (
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/log"
 
-	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
-	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	osdisk "kubevirt.io/kubevirt/pkg/os/disk"
 	"kubevirt.io/kubevirt/pkg/pointer"
+	hostdisk "kubevirt.io/kubevirt/pkg/storage/host-disk"
+	hotplugdisk "kubevirt.io/kubevirt/pkg/storage/hotplug-disk"
 	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
 	migrationutils "kubevirt.io/kubevirt/pkg/util/migrations"
 	cmdclient "kubevirt.io/kubevirt/pkg/virt-handler/cmd-client"
 	migrationproxy "kubevirt.io/kubevirt/pkg/virt-handler/migration-proxy"
+	"kubevirt.io/kubevirt/pkg/virt-launcher/metadata"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/vcpu"
@@ -108,6 +109,7 @@ type migrationMonitor struct {
 	downtimeTuning    *downtimeTuningConfig
 	currentDowntimeMs uint64
 	lastTunedAt       time.Time
+	nextTuneIteration uint64
 
 	// TODO: fields used by legacy stall detector; to be removed
 	lastProgressUpdate int64
@@ -325,6 +327,7 @@ func (l *LibvirtDomainManager) initializeMigrationMetadata(vmi *v1.VirtualMachin
 		StartTimestamp: &now,
 		Mode:           migrationMode,
 	}
+	l.metadataCache.CompletedMigration.Set(metadata.CompletedMigrationData{})
 	l.metadataCache.Migration.Store(m)
 	log.Log.V(4).Infof("initialize migration metadata: %v", m)
 	return false, nil
@@ -446,6 +449,7 @@ func newMigrationMonitor(vmi *v1.VirtualMachineInstance, l *LibvirtDomainManager
 
 	monitor.downtimeTuning = newDowntimeTuningConfig(options.MaxDowntimeMs, options.DowntimeTuning)
 	if monitor.downtimeTuning != nil {
+		monitor.currentDowntimeMs = migrationutils.QEMUDefaultTargetDowntimeMS
 		monitor.logger.Infof("downtime tuning enabled: initial=%dms steps=%d startAfterIteration=%d cooldown=%ds ceiling=%dms",
 			monitor.downtimeTuning.InitialMs, monitor.downtimeTuning.Steps,
 			monitor.downtimeTuning.StartAfterIteration, monitor.downtimeTuning.CooldownSeconds,
@@ -493,12 +497,11 @@ func (m *migrationMonitor) tuneDowntime(dom cli.VirDomain, stats *libvirt.Domain
 
 	var newDowntime uint64
 	switch {
-	case m.currentDowntimeMs == 0:
-		m.currentDowntimeMs = migrationutils.QEMUDefaultTargetDowntimeMS
+	case m.lastTunedAt.IsZero():
 		newDowntime = uint64(cfg.InitialMs)
 	case stats == nil || !stats.MemIterationSet:
 		return
-	case stats.MemIteration < uint64(cfg.StartAfterIteration):
+	case stats.MemIteration < m.nextTuneIteration:
 		return
 	case time.Since(m.lastTunedAt) < time.Duration(cfg.CooldownSeconds)*time.Second:
 		return
@@ -518,6 +521,10 @@ func (m *migrationMonitor) tuneDowntime(dom cli.VirDomain, stats *libvirt.Domain
 		m.currentDowntimeMs, newDowntime, cfg.MaxDowntimeMs)
 	m.currentDowntimeMs = newDowntime
 	m.lastTunedAt = time.Now()
+	m.nextTuneIteration = uint64(cfg.StartAfterIteration)
+	if stats != nil {
+		m.nextTuneIteration = max(m.nextTuneIteration, stats.MemIteration+1)
+	}
 }
 
 func (m *migrationMonitor) isMigrationPostCopy() bool {

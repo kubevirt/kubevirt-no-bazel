@@ -16,14 +16,14 @@ import (
 	"kubevirt.io/client-go/log"
 
 	"kubevirt.io/kubevirt/pkg/config"
-	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
 	"kubevirt.io/kubevirt/pkg/hooks"
-	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	"kubevirt.io/kubevirt/pkg/network/downwardapi"
 	"kubevirt.io/kubevirt/pkg/storage/cbt"
+	containerdisk "kubevirt.io/kubevirt/pkg/storage/container-disk"
+	hostdisk "kubevirt.io/kubevirt/pkg/storage/host-disk"
 	"kubevirt.io/kubevirt/pkg/storage/types"
+	"kubevirt.io/kubevirt/pkg/storage/virtiofs"
 	"kubevirt.io/kubevirt/pkg/util"
-	"kubevirt.io/kubevirt/pkg/virtiofs"
 	"kubevirt.io/kubevirt/pkg/vmitrait"
 )
 
@@ -247,7 +247,7 @@ func withImageVolumes(vmi *v1.VirtualMachineInstance) VolumeRendererOption {
 			}
 		}
 
-		if util.HasKernelBootContainerImage(vmi) {
+		if vmitrait.HasKernelBootContainerImage(vmi) {
 			kbc := vmi.Spec.Domain.Firmware.KernelBoot.Container
 			renderer.addKernelBootVolume(kbc)
 			renderer.addKernelBootVolumeMount()
@@ -867,7 +867,7 @@ func shouldAddLauncherBinaryVolume(vmi *v1.VirtualMachineInstance, imageIDs map[
 		return true
 	}
 	kernelBootImageIDAlreadyExists := strings.Contains(imageIDs[containerdisk.KernelBootVolumeName], "@sha256:")
-	return util.HasKernelBootContainerImage(vmi) && !kernelBootImageIDAlreadyExists
+	return vmitrait.HasKernelBootContainerImage(vmi) && !kernelBootImageIDAlreadyExists
 }
 
 func pathForSwtpmLocalca(vmi *v1.VirtualMachineInstance) string {

@@ -66,10 +66,8 @@ import (
 
 	cloudinit "kubevirt.io/kubevirt/pkg/cloud-init"
 	"kubevirt.io/kubevirt/pkg/config"
-	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
 	"kubevirt.io/kubevirt/pkg/controller"
 	"kubevirt.io/kubevirt/pkg/downwardmetrics"
-	"kubevirt.io/kubevirt/pkg/emptydisk"
 	ephemeraldisk "kubevirt.io/kubevirt/pkg/ephemeral-disk"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hooks"
@@ -83,6 +81,9 @@ import (
 	"kubevirt.io/kubevirt/pkg/pointer"
 	"kubevirt.io/kubevirt/pkg/safepath"
 	"kubevirt.io/kubevirt/pkg/storage/cbt"
+	containerdisk "kubevirt.io/kubevirt/pkg/storage/container-disk"
+	"kubevirt.io/kubevirt/pkg/storage/disksize"
+	"kubevirt.io/kubevirt/pkg/storage/emptydisk"
 	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
 	"kubevirt.io/kubevirt/pkg/storage/volumepath"
 	"kubevirt.io/kubevirt/pkg/unsafepath"
@@ -111,6 +112,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/stats"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/storage/diskdriver"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/util"
+	"kubevirt.io/kubevirt/pkg/vmitrait"
 	virtcache "kubevirt.io/kubevirt/tools/cache"
 )
 
@@ -1127,7 +1129,7 @@ func qemuImgResizeArgs(imagePath string, size int64, preallocated bool) ([]strin
 	} else {
 		preallocateFlag = "--preallocation=off"
 	}
-	size = kutil.AlignImageSizeTo1MiB(size, log.Log.With("image", imagePath))
+	size = disksize.AlignImageSizeTo1MiB(size, log.Log.With("image", imagePath))
 	if size == 0 {
 		return nil, fmt.Errorf("%s must be at least 1MiB", imagePath)
 	}
@@ -1194,7 +1196,7 @@ func possibleGuestSize(disk api.Disk, dt disksource.ResolvedDiskSource) (int64, 
 	preferredSize = min(usableSize, preferredSize)
 
 	size := int64((1 - filesystemOverhead) * float64(preferredSize))
-	size = kutil.AlignImageSizeTo1MiB(size, log.DefaultLogger())
+	size = disksize.AlignImageSizeTo1MiB(size, log.DefaultLogger())
 	if size == 0 {
 		return 0, false
 	}
@@ -1719,7 +1721,7 @@ func (l *LibvirtDomainManager) lookupOrCreateVirDomain(
 
 	l.metadataCache.UID.Set(vmi.UID)
 	l.metadataCache.GracePeriod.Set(
-		api.GracePeriodMetadata{DeletionGracePeriodSeconds: converter.GracePeriodSeconds(vmi)},
+		api.GracePeriodMetadata{DeletionGracePeriodSeconds: gracePeriodSeconds(vmi)},
 	)
 	logger.Info("Domain defined.")
 	return dom, err
@@ -2892,7 +2894,7 @@ func (l *LibvirtDomainManager) linkImageVolumeFilePaths(vmi *v1.VirtualMachineIn
 		}
 	}
 
-	if kutil.HasKernelBootContainerImage(vmi) {
+	if vmitrait.HasKernelBootContainerImage(vmi) {
 		kb := vmi.Spec.Domain.Firmware.KernelBoot
 
 		err := os.MkdirAll(containerdisk.GetKernelBootArtifactPathFromLauncherView(""), 0755)
@@ -2930,7 +2932,7 @@ func (l *LibvirtDomainManager) linkImageVolumeFilePaths(vmi *v1.VirtualMachineIn
 
 func (l *LibvirtDomainManager) syncGracePeriod(vmi *v1.VirtualMachineInstance) {
 	l.metadataCache.GracePeriod.WithSafeBlock(func(gracePeriodMetadata *api.GracePeriodMetadata, _ bool) {
-		gracePeriod := converter.GracePeriodSeconds(vmi)
+		gracePeriod := gracePeriodSeconds(vmi)
 		if gracePeriodMetadata.DeletionGracePeriodSeconds != gracePeriod {
 			gracePeriodMetadata.DeletionGracePeriodSeconds = gracePeriod
 			log.Log.Object(vmi).Infof("Set new termination grace period: %d", gracePeriod)
@@ -3110,4 +3112,12 @@ func (l *LibvirtDomainManager) selectConverterArch(guestArch string) arch.Conver
 		vmArch = guestArch
 	}
 	return arch.NewConverter(vmArch)
+}
+
+func gracePeriodSeconds(vmi *v1.VirtualMachineInstance) int64 {
+	gracePeriodSeconds := v1.DefaultGracePeriodSeconds
+	if vmi.Spec.TerminationGracePeriodSeconds != nil {
+		gracePeriodSeconds = *vmi.Spec.TerminationGracePeriodSeconds
+	}
+	return gracePeriodSeconds
 }

@@ -52,6 +52,7 @@ import (
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/metadata"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/stats"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/testing"
 )
 
@@ -106,6 +107,42 @@ var _ = Describe("Live migration source", func() {
 		)
 		libvirtDomainManager = manager.(*LibvirtDomainManager)
 		libvirtDomainManager.initializeMigrationMetadata(vmi, v1.MigrationPreCopy)
+	})
+
+	Context("Migration metadata initialization", func() {
+		It("should clear completed data before publishing a new migration", func() {
+			libvirtDomainManager.metadataCache.CompletedMigration.Store(metadata.CompletedMigrationData{
+				Stats:        api.CompletedMigrationStats{DowntimeSet: true, Downtime: 150},
+				MigrationUID: "previous-migration",
+			})
+			libvirtDomainManager.metadataCache.ResetNotification()
+			vmi.Status.MigrationState.MigrationUID = "next-migration"
+
+			inProgress, err := libvirtDomainManager.initializeMigrationMetadata(vmi, v1.MigrationPreCopy)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(inProgress).To(BeFalse())
+			completedData, exists := libvirtDomainManager.metadataCache.CompletedMigration.Load()
+			Expect(exists).To(BeTrue())
+			Expect(completedData).To(Equal(metadata.CompletedMigrationData{}))
+			migrationData, exists := libvirtDomainManager.metadataCache.Migration.Load()
+			Expect(exists).To(BeTrue())
+			Expect(migrationData.UID).To(Equal(types.UID("next-migration")))
+		})
+	})
+
+	Context("Migration monitor lifecycle", func() {
+		It("should clear active job stats when the monitor exits", func() {
+			libvirtDomainManager.domainInfoStats = &stats.DomainJobInfo{DataTotalSet: true, DataTotal: 100}
+			mockConn.EXPECT().LookupDomainByName(testDomainName).Return(nil, fmt.Errorf("domain unavailable"))
+			monitor := &migrationMonitor{l: libvirtDomainManager, vmi: vmi}
+			ready := make(chan error, 1)
+
+			monitor.startMonitor(ready)
+
+			Expect(<-ready).To(HaveOccurred())
+			Expect(*libvirtDomainManager.domainInfoStats).To(Equal(stats.DomainJobInfo{}))
+		})
 	})
 
 	Context("Migration result", func() {
@@ -1718,16 +1755,21 @@ var _ = Describe("tuneDowntime", func() {
 		mockDomain.EXPECT().MigrateSetMaxDowntime(uint64(100), uint32(0)).Return(nil)
 		monitor.tuneDowntime(mockDomain, nil, logger)
 		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+		Expect(monitor.nextTuneIteration).To(Equal(uint64(cfg.StartAfterIteration)))
 	})
 
 	It("does nothing when stats is nil after initial call", func() {
 		monitor.currentDowntimeMs = 100
+		monitor.nextTuneIteration = uint64(cfg.StartAfterIteration)
+		monitor.lastTunedAt = time.Now()
 		monitor.tuneDowntime(mockDomain, nil, logger)
 		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
 	})
 
 	It("does nothing before StartAfterIteration", func() {
 		monitor.currentDowntimeMs = 100
+		monitor.nextTuneIteration = uint64(cfg.StartAfterIteration)
+		monitor.lastTunedAt = time.Now().Add(-time.Hour) // cooldown expired; only iteration gate should block
 		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 1}
 		monitor.tuneDowntime(mockDomain, stats, logger)
 		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
@@ -1735,12 +1777,13 @@ var _ = Describe("tuneDowntime", func() {
 
 	It("steps up and respects ceiling", func() {
 		monitor.currentDowntimeMs = 100
-		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 5}
+		monitor.nextTuneIteration = uint64(cfg.StartAfterIteration)
 
 		mockDomain.EXPECT().MigrateSetMaxDowntime(gomock.Any(), uint32(0)).Times(3).Return(nil)
 
-		for i := 0; i < 5; i++ {
-			monitor.lastTunedAt = time.Time{}
+		for i := uint64(0); i < 5; i++ {
+			monitor.lastTunedAt = time.Now().Add(-time.Hour)
+			stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 5 + i}
 			monitor.tuneDowntime(mockDomain, stats, logger)
 		}
 		Expect(monitor.currentDowntimeMs).To(Equal(uint64(1000)))
@@ -1748,10 +1791,38 @@ var _ = Describe("tuneDowntime", func() {
 
 	It("respects cooldown", func() {
 		monitor.currentDowntimeMs = 100
+		monitor.nextTuneIteration = uint64(cfg.StartAfterIteration)
 		monitor.lastTunedAt = time.Now()
 		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 5}
 		monitor.tuneDowntime(mockDomain, stats, logger)
 		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+	})
+
+	It("does not step twice on the same MemIteration", func() {
+		monitor.currentDowntimeMs = 100
+		monitor.nextTuneIteration = uint64(cfg.StartAfterIteration)
+		monitor.lastTunedAt = time.Now().Add(-time.Hour)
+		stats := &libvirt.DomainJobInfo{MemIterationSet: true, MemIteration: 5}
+
+		mockDomain.EXPECT().MigrateSetMaxDowntime(uint64(400), uint32(0)).Return(nil)
+		monitor.tuneDowntime(mockDomain, stats, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(400)))
+		Expect(monitor.nextTuneIteration).To(Equal(uint64(6)))
+
+		monitor.lastTunedAt = time.Now().Add(-time.Hour)
+		monitor.tuneDowntime(mockDomain, stats, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(400)))
+	})
+
+	It("retries initial on failure", func() {
+		mockDomain.EXPECT().MigrateSetMaxDowntime(uint64(100), uint32(0)).Return(fmt.Errorf("fail"))
+		monitor.tuneDowntime(mockDomain, nil, logger)
+		Expect(monitor.lastTunedAt.IsZero()).To(BeTrue())
+
+		mockDomain.EXPECT().MigrateSetMaxDowntime(uint64(100), uint32(0)).Return(nil)
+		monitor.tuneDowntime(mockDomain, nil, logger)
+		Expect(monitor.currentDowntimeMs).To(Equal(uint64(100)))
+		Expect(monitor.lastTunedAt.IsZero()).To(BeFalse())
 	})
 
 	It("does nothing when tuning is nil", func() {

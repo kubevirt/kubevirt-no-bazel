@@ -49,7 +49,6 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/controller"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
-	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
 	metrics "kubevirt.io/kubevirt/pkg/monitoring/metrics/common/vmisync"
 	"kubevirt.io/kubevirt/pkg/network/domainspec"
@@ -57,6 +56,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/pointer"
 	"kubevirt.io/kubevirt/pkg/safepath"
 	"kubevirt.io/kubevirt/pkg/storage/cbt"
+	hostdisk "kubevirt.io/kubevirt/pkg/storage/host-disk"
 	"kubevirt.io/kubevirt/pkg/util/hardware"
 	"kubevirt.io/kubevirt/pkg/util/migrations"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
@@ -573,6 +573,16 @@ func (c *MigrationTargetController) finalCleanup(vmi *v1.VirtualMachineInstance,
 	delete(vmi.Labels, v1.MigrationTargetNodeNameLabel)
 	if !vmi.Status.MigrationState.Failed {
 		delete(vmi.Annotations, v1.CreateMigrationTarget)
+		// Clear SourceState/TargetState after a successful decentralized migration.
+		// This is intentional: IsDecentralizedMigration() keys off SyncAddress on those
+		// states, so clearing flips that to false and lets the target VMI be treated as
+		// a normal Running guest. Safe because:
+		// - finalCleanup only runs when EndTimestamp is set and Completed/Failed
+		// - source-side Halted runstrategy still sees SourceState on the source VMI
+		// - in-progress helpers (IsMigrationSourceSynchronized, target prepare waits)
+		//   are gated on Completed/CreateMigrationTarget and do not run after this path
+		vmi.Status.MigrationState.SourceState = nil
+		vmi.Status.MigrationState.TargetState = nil
 	}
 	return c.updateVMI(vmi, oldSpec, oldStatus, oldLabels, false)
 }

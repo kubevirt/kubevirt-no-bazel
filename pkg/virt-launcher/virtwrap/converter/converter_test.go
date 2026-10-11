@@ -615,6 +615,7 @@ var _ = Describe("Converter", func() {
 			vmi.Spec.Domain.Devices.PanicDevices = []v1.PanicDevice{{Model: pointer.P(v1.Hyperv)}}
 			xml := vmiToDomainXML(vmi, c)
 			Expect(xml).To(ContainSubstring(`<panic model="hyperv"></panic>`))
+			Expect(xml).To(ContainSubstring(`<on_crash>preserve-running</on_crash>`))
 		})
 
 		DescribeTable("should be converted to a libvirt Domain with vmi defaults set", func(arch string, domain string) {
@@ -2148,9 +2149,12 @@ var _ = Describe("Converter", func() {
 		vmi := libvmi.New()
 		v1.SetObjectDefaults_VirtualMachineInstance(vmi)
 		domain := vmiToDomain(vmi, &convertertypes.ConverterContext{Architecture: archconverter.NewConverter(runtime.GOARCH), AllowEmulation: true, HypervisorDeviceAvailable: true})
-		Expect(domain.Spec.SysInfo.System).ToNot(ContainElement(HaveField("Name", Equal("serial"))),
-			"serial entry should not be present in sysinfo",
-		)
+		Expect(domain.Spec.SysInfo).To(ContainElement(HaveField("Type", Equal("smbios"))))
+		for _, sysInfo := range domain.Spec.SysInfo {
+			Expect(sysInfo.System).ToNot(ContainElement(HaveField("Name", Equal("serial"))),
+				"serial entry should not be present in sysinfo",
+			)
+		}
 	})
 
 	Context("IOThreads", func() {

@@ -66,7 +66,6 @@ import (
 
 	virtwait "kubevirt.io/kubevirt/pkg/apimachinery/wait"
 	"kubevirt.io/kubevirt/pkg/certificates/bootstrap"
-	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
 	"kubevirt.io/kubevirt/pkg/controller"
 	clientmetrics "kubevirt.io/kubevirt/pkg/monitoring/metrics/common/client"
 	metrics "kubevirt.io/kubevirt/pkg/monitoring/metrics/virt-handler"
@@ -76,6 +75,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/network/passt"
 	netsetup "kubevirt.io/kubevirt/pkg/network/setup"
 	"kubevirt.io/kubevirt/pkg/service"
+	containerdisk "kubevirt.io/kubevirt/pkg/storage/container-disk"
 	"kubevirt.io/kubevirt/pkg/util"
 	kvtls "kubevirt.io/kubevirt/pkg/util/tls"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
@@ -579,7 +579,7 @@ func (app *virtHandlerApp) Run() {
 		panic(fmt.Errorf("failed to detect the presence of selinux: %v", err))
 	}
 
-	if err := metrics.SetupMetrics(app.HostOverride, app.MaxRequestsInFlight, vmiSourceInformer, machines); err != nil {
+	if err := metrics.SetupMetrics(app.HostOverride, app.MaxRequestsInFlight, vmiSourceInformer, vmiInformer, domainSharedInformer, machines); err != nil {
 		panic(err)
 	}
 
@@ -703,7 +703,7 @@ func (app *virtHandlerApp) runVMStatsServer(vmStatsHandler *rest.VMStatsHandler)
 	mux := restful.NewContainer()
 	webService := new(restful.WebService)
 	webService.Path("/").Consumes(restful.MIME_JSON).Produces(restful.MIME_JSON)
-	webService.Route(webService.GET("/v1/vmstats").
+	webService.Route(webService.POST("/v1/vmstats").
 		To(vmStatsHandler.GetVMStats).
 		Produces(restful.MIME_JSON).
 		Consumes(restful.MIME_JSON).
@@ -799,7 +799,7 @@ func (app *virtHandlerApp) AddFlags() {
 		"Allow intermediate certificates to be used in building up the chain of trust when certificates are externally managed")
 
 	flag.DurationVar(&app.WatchdogTimeoutDuration, "watchdog-timeout", defaultWatchdogTimeout,
-		"Watchdog file timeout")
+		"Watchdog timeout, the time it takes for unresponsive launcher to be declared as failed")
 
 	// TODO: the Device Plugin API does not allow for infinitely available (shared) devices
 	// so the current approach is to register an arbitrary number.

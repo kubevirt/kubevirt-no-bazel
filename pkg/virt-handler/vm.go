@@ -55,8 +55,6 @@ import (
 	"kubevirt.io/kubevirt/pkg/config"
 	"kubevirt.io/kubevirt/pkg/controller"
 	"kubevirt.io/kubevirt/pkg/executor"
-	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
-	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
 	metrics "kubevirt.io/kubevirt/pkg/monitoring/metrics/common/vmisync"
 	vhmetrics "kubevirt.io/kubevirt/pkg/monitoring/metrics/virt-handler"
@@ -64,6 +62,8 @@ import (
 	neterrors "kubevirt.io/kubevirt/pkg/network/errors"
 	netsetup "kubevirt.io/kubevirt/pkg/network/setup"
 	netvmispec "kubevirt.io/kubevirt/pkg/network/vmispec"
+	hostdisk "kubevirt.io/kubevirt/pkg/storage/host-disk"
+	hotplugdisk "kubevirt.io/kubevirt/pkg/storage/hotplug-disk"
 
 	pluginv1alpha1 "kubevirt.io/api/plugin/v1alpha1"
 
@@ -1543,7 +1543,7 @@ func (c *VirtualMachineController) processVmCleanup(vmi *v1.VirtualMachineInstan
 
 func (c *VirtualMachineController) processVmDestroy(vmi *v1.VirtualMachineInstance, domain *api.Domain) error {
 	if c.pluginExecutor != nil {
-		if err := c.pluginExecutor.CallNodeHooks(pluginv1alpha1.NodeHookPreVMStop, vmi, c.host); err != nil {
+		if err := c.pluginExecutor.CallNodeHooks(pluginv1alpha1.NodeHookOnVMStop, vmi, c.host); err != nil {
 			return err
 		}
 	}
@@ -1554,7 +1554,7 @@ func (c *VirtualMachineController) processVmDestroy(vmi *v1.VirtualMachineInstan
 
 func (c *VirtualMachineController) processVmShutdown(vmi *v1.VirtualMachineInstance, domain *api.Domain) error {
 	if c.pluginExecutor != nil {
-		if err := c.pluginExecutor.CallNodeHooks(pluginv1alpha1.NodeHookPreVMStop, vmi, c.host); err != nil {
+		if err := c.pluginExecutor.CallNodeHooks(pluginv1alpha1.NodeHookOnVMStop, vmi, c.host); err != nil {
 			return err
 		}
 	}

@@ -51,17 +51,17 @@ import (
 	"kubevirt.io/kubevirt/pkg/pointer"
 
 	k6tconfig "kubevirt.io/kubevirt/pkg/config"
-	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
 	"kubevirt.io/kubevirt/pkg/hooks"
 	"kubevirt.io/kubevirt/pkg/libvmi"
 	"kubevirt.io/kubevirt/pkg/network/istio"
+	containerdisk "kubevirt.io/kubevirt/pkg/storage/container-disk"
 	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
+	"kubevirt.io/kubevirt/pkg/storage/virtiofs"
 	"kubevirt.io/kubevirt/pkg/testutils"
 	"kubevirt.io/kubevirt/pkg/util"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
 	"kubevirt.io/kubevirt/pkg/virt-config/featuregate"
 	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
-	"kubevirt.io/kubevirt/pkg/virtiofs"
 	"kubevirt.io/kubevirt/tools/vms-generator/utils"
 )
 
@@ -2454,6 +2454,10 @@ var _ = Describe("Template", func() {
 					By("Setting huge page memory")
 					vmi.Spec.Domain.Memory = &v1.Memory{Hugepages: &v1.Hugepages{PageSize: "1Gi"}}
 				}
+				setDedicatedCPUPlacement := func(vmi *v1.VirtualMachineInstance) {
+					By("Enabling dedicated CPU placement")
+					vmi.Spec.Domain.CPU = &v1.CPU{Cores: 1, Sockets: 1, Threads: 1, DedicatedCPUPlacement: true}
+				}
 
 				DescribeTable("should honor memoryOvercommit when set in the CR", func(expectOvercommit overcommitExpectation, memorySetters ...memorySetterFunc) {
 					config, kvStore, svc = configFactory(defaultArch)
@@ -2513,6 +2517,7 @@ var _ = Describe("Template", func() {
 					Entry("memory limits only - not expect overcommit", notExpectOvercommit, setMemoryLimits),
 					Entry("guest memory only - expect overcommit", expectOvercommit, setGuestMemory),
 					Entry("hugepages memory only - not expect overcommit", notExpectOvercommit, setHugePagesMemory),
+					Entry("guest memory with dedicated CPU placement - not expect overcommit", notExpectOvercommit, setGuestMemory, setDedicatedCPUPlacement),
 
 					// Pairs of memory setters
 					Entry("memory requests and limits - not expect overcommit", notExpectOvercommit, setMemoryRequests, setMemoryLimits),

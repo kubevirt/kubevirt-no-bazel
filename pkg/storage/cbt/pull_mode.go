@@ -38,6 +38,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/certificates/triple"
 	"kubevirt.io/kubevirt/pkg/certificates/triple/cert"
 	"kubevirt.io/kubevirt/pkg/pointer"
+	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
 )
 
 const (
@@ -113,6 +114,20 @@ func (ctrl *VMBackupController) handlePullMode(backup *backupv1.VirtualMachineBa
 	return ctrl.populateExportLinks(backup, vmExport)
 }
 
+// exportServerAddrForService returns the address the backup tunnel should dial
+// and the TLS server name. The dial address is ExportServiceHost (host:port,
+// 443 for ClusterIP and 8443 for headless). serverName stays host-only so the
+// cert CN check does not see a port in the name.
+func exportServerAddrForService(serviceName, namespace string, svc *corev1.Service) (addr, serverName string) {
+	host := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+	serverName = fmt.Sprintf("%s.cluster.local", host)
+	if svc == nil {
+		// ExportServiceHost requires a Service object; treat nil like headless.
+		return fmt.Sprintf("%s:%d", host, storagetypes.ExportServiceDialPort(nil)), serverName
+	}
+	return storagetypes.ExportServiceHost(svc), serverName
+}
+
 func (ctrl *VMBackupController) handlePrepareBackupExport(backup *backupv1.VirtualMachineBackup, vmi *v1.VirtualMachineInstance, vmExport *exportv1.VirtualMachineExport) error {
 	ca, err := ctrl.exportCaManager.GetCurrentRaw()
 	if err != nil {
@@ -122,8 +137,11 @@ func (ctrl *VMBackupController) handlePrepareBackupExport(backup *backupv1.Virtu
 	if err != nil {
 		return err
 	}
-	exportAddr := fmt.Sprintf("%s.%s.svc", vmExport.Status.ServiceName, vmExport.Namespace)
-	serverName := fmt.Sprintf("%s.cluster.local", exportAddr)
+	svc, err := ctrl.client.CoreV1().Services(vmExport.Namespace).Get(context.Background(), vmExport.Status.ServiceName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get export service %s/%s: %w", vmExport.Namespace, vmExport.Status.ServiceName, err)
+	}
+	exportAddr, serverName := exportServerAddrForService(vmExport.Status.ServiceName, vmExport.Namespace, svc)
 	backupOptions := &backupv1.BackupOptions{
 		BackupName:       backup.Name,
 		Cmd:              backupv1.Export,
@@ -184,7 +202,7 @@ func (ctrl *VMBackupController) createBackupExport(backup *backupv1.VirtualMachi
 	}
 
 	setPreparingExport(backup)
-	backup.Status.EndpointCert = nil
+	backup.Status.Links = nil
 	return nil
 }
 
@@ -197,46 +215,51 @@ func (ctrl *VMBackupController) populateExportLinks(backup *backupv1.VirtualMach
 		return nil
 	}
 
-	links := vmExport.Status.Links
-	hasInternalLinks := links != nil && links.Internal != nil && len(links.Internal.Backups) > 0
-	hasExternalLinks := links != nil && links.External != nil && len(links.External.Backups) > 0
-
-	if !hasInternalLinks && !hasExternalLinks {
-		return fmt.Errorf("associated export ready but has no backup links")
+	backupLinks, err := buildBackupLinks(vmExport.Status.Links)
+	if err != nil {
+		return err
 	}
 
-	iterableLinks := links.External
-	if !hasExternalLinks {
-		iterableLinks = links.Internal
+	backup.Status.Links = backupLinks
+	setExportReady(backup)
+
+	return nil
+}
+
+func buildBackupLinks(links *exportv1.VirtualMachineExportLinks) (*backupv1.BackupLinks, error) {
+	if links == nil || (links.Internal == nil && links.External == nil) {
+		return nil, fmt.Errorf("associated export ready but has no backup links")
 	}
 
-	if iterableLinks.Cert == "" {
-		return fmt.Errorf("associated export ready but has no cert exposed")
+	result := &backupv1.BackupLinks{}
+	if links.Internal != nil {
+		if links.Internal.Cert == "" {
+			return nil, fmt.Errorf("associated export ready but internal link has no cert exposed")
+		}
+		result.Internal = toBackupLink(links.Internal)
+	}
+	if links.External != nil {
+		result.External = toBackupLink(links.External)
 	}
 
-	var volumes []backupv1.BackupVolumeInfo
-	endpointMap := make(map[string][]exportv1.VirtualMachineExportBackupEndpoint)
-	for _, backupEndpoint := range iterableLinks.Backups {
-		endpointMap[backupEndpoint.Name] = backupEndpoint.Endpoints
-	}
-	for _, volume := range backup.Status.IncludedVolumes {
-		if endpoints, ok := endpointMap[volume.VolumeName]; ok {
-			for _, link := range endpoints {
-				switch link.Endpoint {
-				case exportv1.Data:
-					volume.DataEndpoint = link.Url
-				case exportv1.Map:
-					volume.MapEndpoint = link.Url
-				}
+	return result, nil
+}
+
+func toBackupLink(link *exportv1.VirtualMachineExportLink) *backupv1.BackupLink {
+	bl := &backupv1.BackupLink{Cert: link.Cert}
+	for _, b := range link.Backups {
+		vl := backupv1.BackupVolumeLink{VolumeName: b.Name}
+		for _, ep := range b.Endpoints {
+			switch ep.Endpoint {
+			case exportv1.Data:
+				vl.DataEndpoint = ep.Url
+			case exportv1.Map:
+				vl.MapEndpoint = ep.Url
 			}
 		}
-		volumes = append(volumes, volume)
+		bl.Volumes = append(bl.Volumes, vl)
 	}
-
-	setExportReady(backup)
-	backup.Status.EndpointCert = &iterableLinks.Cert
-	backup.Status.IncludedVolumes = volumes
-	return nil
+	return bl
 }
 
 func (ctrl *VMBackupController) generateBackupTunnelCert(backup *backupv1.VirtualMachineBackup) (*triple.KeyPair, error) {

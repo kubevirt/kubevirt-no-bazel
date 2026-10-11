@@ -27,10 +27,11 @@ import (
 	"kubevirt.io/client-go/log"
 
 	"kubevirt.io/kubevirt/pkg/config"
-	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
 	"kubevirt.io/kubevirt/pkg/pointer"
+	containerdisk "kubevirt.io/kubevirt/pkg/storage/container-disk"
 	"kubevirt.io/kubevirt/pkg/util"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
+	"kubevirt.io/kubevirt/pkg/vmitrait"
 )
 
 const (
@@ -167,7 +168,7 @@ func configureBIOS(firmware *v1.Firmware, domain *api.Domain) {
 }
 
 func configureKernelBoot(vmi *v1.VirtualMachineInstance, firmware *v1.Firmware, domain *api.Domain) {
-	if util.HasKernelBootContainerImage(vmi) {
+	if vmitrait.HasKernelBootContainerImage(vmi) {
 		configureKernelBootContainer(vmi, firmware.KernelBoot, domain)
 	}
 

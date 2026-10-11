@@ -25,7 +25,7 @@ fi
 HOST_ARCHITECTURE="$(uname -m)"
 
 sandbox_root=${SANDBOX_DIR}/default/root
-sandbox_hash="3660948f9884fd8a9adc29cd9aa3039181832cd1"
+sandbox_hash="4bbfc0bd38e3f43f09cb9a2c0397fe67bc51010d"
 
 function kubevirt::bootstrap::regenerate() {
     (

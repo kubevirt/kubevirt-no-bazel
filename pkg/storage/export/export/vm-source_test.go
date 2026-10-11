@@ -19,6 +19,7 @@
 package export
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -373,19 +374,19 @@ var _ = Describe("PVC source", func() {
 		exportVolumeFormats := make([]exportv1.VirtualMachineExportVolumeFormat, 0)
 		exportVolumeFormats = append(exportVolumeFormats, exportv1.VirtualMachineExportVolumeFormat{
 			Format: exportv1.KubeVirtRaw,
-			Url:    fmt.Sprintf("https://%s.%s.svc/volumes/%s/disk.img", fmt.Sprintf("%s-%s", exportPrefix, exportName), namespace, volumeNames[0]),
+			Url:    fmt.Sprintf("%s/volumes/%s/disk.img", internalExportBaseURL(exportName, namespace), volumeNames[0]),
 		})
 		exportVolumeFormats = append(exportVolumeFormats, exportv1.VirtualMachineExportVolumeFormat{
 			Format: exportv1.KubeVirtGz,
-			Url:    fmt.Sprintf("https://%s.%s.svc/volumes/%s/disk.img.gz", fmt.Sprintf("%s-%s", exportPrefix, exportName), namespace, volumeNames[0]),
+			Url:    fmt.Sprintf("%s/volumes/%s/disk.img.gz", internalExportBaseURL(exportName, namespace), volumeNames[0]),
 		})
 		exportVolumeFormats = append(exportVolumeFormats, exportv1.VirtualMachineExportVolumeFormat{
 			Format: exportv1.Dir,
-			Url:    fmt.Sprintf("https://%s.%s.svc/volumes/%s/dir", fmt.Sprintf("%s-%s", exportPrefix, exportName), namespace, volumeNames[1]),
+			Url:    fmt.Sprintf("%s/volumes/%s/dir", internalExportBaseURL(exportName, namespace), volumeNames[1]),
 		})
 		exportVolumeFormats = append(exportVolumeFormats, exportv1.VirtualMachineExportVolumeFormat{
 			Format: exportv1.ArchiveGz,
-			Url:    fmt.Sprintf("https://%s.%s.svc/volumes/%s/disk.tar.gz", fmt.Sprintf("%s-%s", exportPrefix, exportName), namespace, volumeNames[1]),
+			Url:    fmt.Sprintf("%s/volumes/%s/disk.tar.gz", internalExportBaseURL(exportName, namespace), volumeNames[1]),
 		})
 		verifyLinksInternal(vmExport, exportVolumeFormats...)
 	}
@@ -661,5 +662,27 @@ var _ = Describe("PVC source", func() {
 		Expect(retry).To(BeEquivalentTo(0))
 		testutils.ExpectEvent(recorder, serviceCreatedEvent)
 		testutils.ExpectEvent(recorder, exporterPodFailedOrCompletedEvent)
+	})
+
+	It("should not include OCI manifest link when OCIExport feature gate is disabled", func() {
+		testVMExport := createVMVMExport()
+		controller.VMInformer.GetStore().Add(createVMWithDataVolumes())
+		controller.PVCInformer.GetStore().Add(createPVC("volume1", "kubevirt"))
+		controller.PVCInformer.GetStore().Add(createPVC("volume2", "kubevirt"))
+		expectExporterCreate(k8sClient, k8sv1.PodRunning)
+		_, err := vmExportClient.ExportV1().VirtualMachineExports(testVMExport.Namespace).Create(
+			context.Background(), testVMExport, metav1.CreateOptions{})
+		Expect(err).ToNot(HaveOccurred())
+
+		retry, err := controller.updateVMExport(testVMExport)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(retry).To(BeEquivalentTo(0))
+
+		updated, err := vmExportClient.ExportV1().VirtualMachineExports(testVMExport.Namespace).Get(
+			context.Background(), testVMExport.Name, metav1.GetOptions{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.Status.Links.Internal).ToNot(BeNil())
+		Expect(updated.Status.Links.Internal.Manifests).ToNot(ContainElement(
+			HaveField("Type", exportv1.OCI)))
 	})
 })

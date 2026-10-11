@@ -17,7 +17,7 @@
  *
  */
 
-package cbt
+package cbt_test
 
 import (
 	. "github.com/onsi/ginkgo/v2"
@@ -33,19 +33,16 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/controller"
 	"kubevirt.io/kubevirt/pkg/libvmi"
+	"kubevirt.io/kubevirt/pkg/storage/cbt"
 	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
 	"kubevirt.io/kubevirt/pkg/testutils"
-	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
-	"kubevirt.io/kubevirt/pkg/virt-config/featuregate"
 )
 
 var _ = Describe("CBT memory overhead", func() {
 	var (
 		pvcStore        cache.Store
 		trackerInformer cache.SharedIndexInformer
-		config          *virtconfig.ClusterConfig
-		kvStore         cache.Store
-		calc            *MemoryCalculator
+		calc            *cbt.MemoryCalculator
 	)
 
 	BeforeEach(func() {
@@ -54,12 +51,8 @@ var _ = Describe("CBT memory overhead", func() {
 			&backupv1.VirtualMachineBackupTracker{},
 			controller.GetVirtualMachineBackupTrackerInformerIndexers(),
 		)
-		config, _, kvStore = testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{
-			DeveloperConfiguration: &v1.DeveloperConfiguration{
-				FeatureGates: []string{featuregate.IncrementalBackupGate},
-			},
-		})
-		calc = NewMemoryCalculator(pvcStore, trackerInformer, config)
+
+		calc = cbt.NewMemoryCalculator(pvcStore, trackerInformer, stubClusterConfigurer{incrementalBackupEnabled: true})
 	})
 
 	addPVC := func(name, namespace string, capacity resource.Quantity) {
@@ -94,13 +87,7 @@ var _ = Describe("CBT memory overhead", func() {
 	}
 
 	It("should return zero when IncrementalBackup feature gate is disabled", func() {
-		testutils.UpdateFakeKubeVirtClusterConfig(kvStore, &v1.KubeVirt{
-			Spec: v1.KubeVirtSpec{
-				Configuration: v1.KubeVirtConfiguration{
-					DeveloperConfiguration: &v1.DeveloperConfiguration{},
-				},
-			},
-		})
+		calc = cbt.NewMemoryCalculator(pvcStore, trackerInformer, stubClusterConfigurer{incrementalBackupEnabled: false})
 		addPVC("test-pvc", metav1.NamespaceDefault, resource.MustParse("1Ti"))
 		addTracker("tracker1", "test-vmi", metav1.NamespaceDefault)
 		testVMI := cbtEnabled(libvmi.New(
@@ -274,3 +261,11 @@ var _ = Describe("CBT memory overhead", func() {
 		Expect(overhead.String()).To(Equal("22Mi"))
 	})
 })
+
+type stubClusterConfigurer struct {
+	incrementalBackupEnabled bool
+}
+
+func (s stubClusterConfigurer) IncrementalBackupEnabled() bool {
+	return s.incrementalBackupEnabled
+}

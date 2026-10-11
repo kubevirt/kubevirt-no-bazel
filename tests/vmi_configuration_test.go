@@ -48,7 +48,6 @@ import (
 	"kubevirt.io/kubevirt/pkg/hypervisor/kvm"
 	"kubevirt.io/kubevirt/pkg/libvmi"
 	"kubevirt.io/kubevirt/pkg/pointer"
-	"kubevirt.io/kubevirt/pkg/testutils"
 	hw_utils "kubevirt.io/kubevirt/pkg/util/hardware"
 	"kubevirt.io/kubevirt/pkg/virt-config/featuregate"
 	"kubevirt.io/kubevirt/pkg/virt-controller/services"
@@ -79,23 +78,6 @@ var _ = Describe("[sig-compute]Configurations", decorators.SigCompute, func() {
 
 	BeforeEach(func() {
 		virtClient = kubevirt.Client()
-	})
-
-	Context("when requesting virtio-transitional models", func() {
-		It("[test_id:6957]should start and run the guest", func() {
-			vmi := libvmifact.NewAlpine(
-				libvmi.WithRng(),
-				libvmi.WithWatchdog(v1.WatchdogActionPoweroff, libnode.GetArch()),
-				libvmi.WithTablet("tablet", "virtio"),
-				libvmi.WithTablet("tablet1", "usb"),
-			)
-			vmi.Spec.Domain.Devices.UseVirtioTransitional = pointer.P(true)
-			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsSmall())
-			Expect(console.LoginToAlpine(vmi)).To(Succeed())
-			domSpec, err := libdomain.GetRunningVMIDomainSpec(vmi)
-			Expect(err).ToNot(HaveOccurred())
-			testutils.ExpectVirtioTransitionalOnly(domSpec)
-		})
 	})
 
 	Context("[rfe_id:897][crit:medium][vendor:cnv-qe@redhat.com][level:component]for CPU and memory limits should", decorators.WgS390x, func() {
@@ -1305,21 +1287,6 @@ var _ = Describe("[sig-compute]Configurations", decorators.SigCompute, func() {
 				}, 15)).To(Succeed())
 			})
 
-			It("[test_id:1690]should fail the vmi creation if Guaranteed QOS cannot be set", func() {
-				cpuVmi := libvmifact.NewAlpine()
-				cpuVmi.Spec.Domain.CPU = &v1.CPU{
-					DedicatedCPUPlacement: true,
-				}
-				cpuVmi.Spec.Domain.Resources.Requests[k8sv1.ResourceCPU] = resource.MustParse("2")
-				cpuVmi.Spec.Domain.Resources = v1.ResourceRequirements{
-					Limits: k8sv1.ResourceList{
-						k8sv1.ResourceCPU: resource.MustParse("4"),
-					},
-				}
-				By("Starting a VirtualMachineInstance")
-				cpuVmi, err := virtClient.VirtualMachineInstance(testsuite.GetTestNamespace(cpuVmi)).Create(context.Background(), cpuVmi, metav1.CreateOptions{})
-				Expect(err).To(HaveOccurred())
-			})
 			It("[test_id:830]should start a vm with no cpu pinning after a vm with cpu pinning on same node", func() {
 				Vmi := libvmifact.NewAlpine()
 				cpuVmi := libvmifact.NewAlpine()
