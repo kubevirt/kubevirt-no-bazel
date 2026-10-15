@@ -27,7 +27,7 @@ bazel-build:
 bazel-build-functests:
 	hack/dockerized "hack/bazel-fmt.sh && hack/bazel-build-functests.sh"
 
-build-functests: bazel-build-functests
+build-functests: go-build-functests
 
 bazel-build-verify: bazel-build
 	./hack/dockerized "hack/bazel-fmt.sh"
@@ -43,6 +43,18 @@ bazel-push-images:
 	BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} hack/push-container-manifest.sh
 
 push: bazel-push-images
+
+container-build-images:
+	BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} IMAGE_PREFIX=${IMAGE_PREFIX} KUBEVIRT_CRI=${KUBEVIRT_CRI} BUILDER_IMAGE=${BUILDER_IMAGE} ./hack/multi-arch-container.sh
+
+container-push-images:
+	BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} IMAGE_PREFIX=${IMAGE_PREFIX} KUBEVIRT_CRI=${KUBEVIRT_CRI} ./hack/multi-arch-push-container.sh
+
+rpm-base-build:
+	./hack/rpm-base-images/build-base-images.sh
+
+rpm-base-push:
+	./hack/rpm-base-images/push-base-images.sh
 
 bazel-test:
 	hack/dockerized "hack/bazel-fmt.sh && CI=${CI} ARTIFACTS=${ARTIFACTS} WHAT=${WHAT}  hack/bazel-test.sh"
@@ -70,7 +82,7 @@ client-python:
 	hack/dockerized "DOCKER_TAG=${DOCKER_TAG} ./hack/gen-client-python/generate.sh"
 
 go-build:
-	hack/dockerized "export KUBEVIRT_VERSION=${KUBEVIRT_VERSION} && KUBEVIRT_GO_BUILD_TAGS=${KUBEVIRT_GO_BUILD_TAGS} KUBEVIRT_RELEASE=${KUBEVIRT_RELEASE} ./hack/build-go.sh install ${WHAT}" && ./hack/build-copy-artifacts.sh ${WHAT}
+	hack/dockerized "export BUILD_ARCH=${BUILD_ARCH} KUBEVIRT_VERSION=${KUBEVIRT_VERSION} && KUBEVIRT_GO_BUILD_TAGS=${KUBEVIRT_GO_BUILD_TAGS} KUBEVIRT_RELEASE=${KUBEVIRT_RELEASE} ./hack/build-go.sh install ${WHAT}" && ./hack/build-copy-artifacts.sh ${WHAT}
 
 go-build-functests:
 	hack/dockerized "KUBEVIRT_GO_BUILD_TAGS=${KUBEVIRT_GO_BUILD_TAGS} ./hack/go-build-functests.sh"
@@ -104,7 +116,7 @@ integ-test:
 functest: build-functests
 	hack/functests.sh
 
-dump: bazel-build
+dump: go-build-functests
 	hack/dump.sh
 
 functest-image-build: manifests build-functests
@@ -276,6 +288,10 @@ vmlog-checker:
 	bazel-build-images \
 	bazel-push-images \
 	bazel-test \
+	container-build-images \
+	container-push-images \
+	rpm-base-build \
+	rpm-base-push \
 	functest-image-build \
 	functest-image-push \
 	test \

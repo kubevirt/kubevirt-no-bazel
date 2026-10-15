@@ -1,0 +1,23 @@
+# hack/build-images-container.sh sets the image build arguments.
+ARG BUILDER_IMAGE
+
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS builder
+
+ARG BUILD_ARCH=amd64
+ARG KUBEVIRT_VERSION
+
+WORKDIR /workspace
+
+COPY . .
+
+RUN source /etc/profile.d/gimme.sh && \
+    hack/build-go.sh install cmd/cniplugins/passt-binding/cmd
+
+FROM registry.k8s.io/busybox@sha256:545e6a6310a27636260920bc07b994a299b6708a1b26910cfefd335fdfb60d2b
+
+ARG BUILD_ARCH=amd64
+ARG KUBEVIRT_VERSION
+
+COPY --from=builder /workspace/_out/cmd/cmd/cmd /cni/kubevirt-passt-binding
+
+ENTRYPOINT ["/cni/kubevirt-passt-binding"]
