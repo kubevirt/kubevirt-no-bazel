@@ -36,6 +36,7 @@ case ${PLATFORM} in
 x86_64* | i?86_64* | amd64*) BUILD_ARCH=${BUILD_ARCH:-amd64} ;;
 aarch64* | arm64*) BUILD_ARCH=${BUILD_ARCH:-arm64} ;;
 s390x) BUILD_ARCH=${BUILD_ARCH:-s390x} ;;
+ppc64le) BUILD_ARCH=${BUILD_ARCH:-ppc64le} ;;
 *)
     echo "Unsupported architecture: ${PLATFORM}"
     exit 1

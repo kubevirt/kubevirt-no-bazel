@@ -35,7 +35,7 @@ source "${REPO_ROOT}/hack/container-utils.sh"
 source "${SCRIPT_DIR}/common.sh"
 
 # RPM updates apply to every architecture
-BUILD_ARCH=${BUILD_ARCH:-amd64,arm64,s390x}
+BUILD_ARCH=${BUILD_ARCH:-amd64,arm64,s390x,ppc64le}
 
 # The builder image pinned in hack/dockerized
 eval "$(grep -E '^(kubevirt_builder_version|default_kubevirt_builder_image)=' "${REPO_ROOT}/hack/dockerized")"
@@ -70,6 +70,7 @@ compute_tars_for_image() {
     amd64) rpm_arch="x86_64" ;;
     arm64) rpm_arch="aarch64" ;;
     s390x) rpm_arch="s390x" ;;
+    ppc64le) rpm_arch="ppc64le" ;;
     esac
 
     # The rpmtree name: the image name without a -base suffix

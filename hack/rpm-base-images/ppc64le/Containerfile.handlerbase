@@ -1,0 +1,31 @@
+#
+# This file is part of the KubeVirt project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Copyright The KubeVirt Authors.
+
+# ppc64le base image of virt-handler. The RPMs are installed with dnf, because
+# there is no bazeldnf for ppc64le.
+
+FROM quay.io/centos/centos:stream10
+
+RUN dnf -y --enablerepo=crb install --setopt=install_weak_deps=False \
+        passt qemu-img findutils iproute nftables procps-ng selinux-policy \
+        selinux-policy-targeted tar util-linux xorriso && \
+    dnf clean all && \
+    test -x /usr/bin/passt-repair && chmod 0744 /usr/bin/passt-repair
+
+RUN (getent group qemu || groupadd -g 107 qemu) && \
+    (getent passwd qemu || useradd -u 107 -g qemu -s /bin/bash qemu) && \
+    test "$(id -u qemu)" = 107

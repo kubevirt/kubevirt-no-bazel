@@ -44,6 +44,12 @@ container_image_targets() {
     local arch
     arch=$(format_archname "$1" tag) || return 1
 
+    # ppc64le: the core components only, for now
+    if [[ "${arch}" == "ppc64le" ]]; then
+        echo "virt-operator virt-api virt-controller virt-handler virt-launcher virt-exportserver virt-exportproxy virt-synchronization-controller"
+        return
+    fi
+
     local targets="
         virt-operator
         virt-api

@@ -34,6 +34,7 @@ case ${PLATFORM} in
 x86_64* | i?86_64* | amd64*) BUILD_ARCH=${BUILD_ARCH:-amd64} ;;
 aarch64* | arm64*) BUILD_ARCH=${BUILD_ARCH:-arm64} ;;
 s390x) BUILD_ARCH=${BUILD_ARCH:-s390x} ;;
+ppc64le) BUILD_ARCH=${BUILD_ARCH:-ppc64le} ;;
 *)
     echo "Unsupported architecture: ${PLATFORM}"
     exit 1
@@ -100,6 +101,9 @@ s390x)
     DISTROLESS_DIGEST=$(workspace_digest go_image_base_s390x)
     ALPINE_ISO_ENTRY=alpine_image_s390x
     ;;
+ppc64le)
+    DISTROLESS_DIGEST=$(workspace_digest go_image_base_ppc64le)
+    ;;
 *)
     echo "Error: Unsupported architecture ${PLATFORM_ARCH} (from BUILD_ARCH=${BUILD_ARCH})"
     exit 1
@@ -146,7 +150,11 @@ BUILD_ARGS="--build-arg DISTROLESS_BASE_IMAGE=${DISTROLESS_BASE_IMAGE}"
 # The images that push-images-container.sh pushes, plus the virt-template
 # images: those are only retagged here, because the operator deploys them
 # with the virt-template version as the tag, not with DOCKER_TAG.
-default_targets="$(container_image_targets ${BUILD_ARCH}) virt-template-apiserver virt-template-controller"
+default_targets="$(container_image_targets ${BUILD_ARCH})"
+# virt-template has no ppc64le digest
+if [[ "${PLATFORM_ARCH}" != "ppc64le" ]]; then
+    default_targets+=" virt-template-apiserver virt-template-controller"
+fi
 
 # Allow override via PUSH_TARGETS
 BUILD_TARGETS=(${PUSH_TARGETS:-${default_targets}})

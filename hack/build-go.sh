@@ -45,7 +45,7 @@ fi
 HOST_ARCH=$(format_archname "$(uname -m)" tag)
 if [ "${target}" = "install" ]; then
     ARCH=$(format_archname "${BUILD_ARCH:-$(uname -m)}" tag) || {
-        echo "BUILD_ARCH=${BUILD_ARCH}: build one of amd64, arm64 or s390x at a time" >&2
+        echo "BUILD_ARCH=${BUILD_ARCH}: build one of amd64, arm64, s390x or ppc64le at a time" >&2
         exit 1
     }
 else

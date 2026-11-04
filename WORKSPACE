@@ -454,6 +454,13 @@ pull(
     repository = "distroless/base-debian12",
 )
 
+pull(
+    name = "go_image_base_ppc64le",
+    digest = "sha256:36176a978c3373552c797b50f5bba74f99b7b767f9738e33df380b3edefd8d09",
+    registry = "gcr.io",
+    repository = "distroless/base-debian12",
+)
+
 # Pull fedora container-disk preconfigured with ci tooling
 # like stress and qemu guest agent pre-configured
 # TODO build fedora_with_test_tooling for multi-arch
