@@ -1,0 +1,5 @@
+# Of the host's build output, the images only copy the programs that
+# hack/build-image-binaries.sh compiles into _out/cmd/. The rest would only
+# enlarge every build context.
+_out/*
+!_out/cmd

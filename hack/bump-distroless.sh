@@ -9,6 +9,7 @@ source hack/config.sh
 DISTROLESS_AMD64_DIGEST=$(skopeo inspect docker://gcr.io/distroless/base-debian12:latest-amd64 | jq '.Digest' -r)
 DISTROLESS_ARM64_DIGEST=$(skopeo inspect docker://gcr.io/distroless/base-debian12:latest-arm64 | jq '.Digest' -r)
 DISTROLESS_S390X_DIGEST=$(skopeo inspect docker://gcr.io/distroless/base-debian12:latest-s390x | jq '.Digest' -r)
+DISTROLESS_PPC64LE_DIGEST=$(skopeo inspect docker://gcr.io/distroless/base-debian12:latest-ppc64le | jq '.Digest' -r)
 
 # buildozer returns a non-zero exit code (3) if the commands were a success but did not change the file.
 # To make the command idempotent, first set the digest to a kind-of-unique number to work around this behaviour.
@@ -22,4 +23,5 @@ cat <<EOF | bazel run --config=${ARCHITECTURE} -- :buildozer -f -
 set digest "${DISTROLESS_AMD64_DIGEST}"|${KUBEVIRT_DIR}/WORKSPACE:go_image_base
 set digest "${DISTROLESS_ARM64_DIGEST}"|${KUBEVIRT_DIR}/WORKSPACE:go_image_base_aarch64
 set digest "${DISTROLESS_S390X_DIGEST}"|${KUBEVIRT_DIR}/WORKSPACE:go_image_base_s390x
+set digest "${DISTROLESS_PPC64LE_DIGEST}"|${KUBEVIRT_DIR}/WORKSPACE:go_image_base_ppc64le
 EOF
