@@ -103,6 +103,7 @@ s390x)
     ;;
 ppc64le)
     DISTROLESS_DIGEST=$(workspace_digest go_image_base_ppc64le)
+    ALPINE_ISO_ENTRY=alpine_image_ppc64le
     ;;
 *)
     echo "Error: Unsupported architecture ${PLATFORM_ARCH} (from BUILD_ARCH=${BUILD_ARCH})"

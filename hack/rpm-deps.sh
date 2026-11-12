@@ -622,5 +622,102 @@ if [ -z "${SINGLE_ARCH}" ] || [ "${SINGLE_ARCH}" == "s390x" ]; then
     # Note: sandbox regeneration is done separately
 fi
 
+if [ "${KUBEVIRT_CENTOS_STREAM_VERSION}" = "10" ] && [ "${SINGLE_ARCH}" == "ppc64le" ]; then
+
+    # No libguestfs-tools: CentOS Stream 10 has no libguestfs-tools for
+    # ppc64le. No sandboxroot or ldd rules either: they are only used by Bazel.
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name testimage_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $testimage_main
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name libvirt-devel_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $libvirtdevel_main \
+        $libvirtdevel_extra
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name libnbd-devel_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $libnbddevel_main
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name launcherbase_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        --force-ignore-with-dependencies '^mozjs60' \
+        --force-ignore-with-dependencies 'python' \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $launcherbase_main \
+        $launcherbase_extra \
+        edk2-ovmf-${EDK2_VERSION} \
+        qemu-kvm-device-display-virtio-gpu-${QEMU_VERSION} \
+        qemu-kvm-device-display-virtio-gpu-pci-${QEMU_VERSION}
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name passt_tree_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        passt-${PASST_VERSION}
+
+    # create a rpmtree for virt-handler
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name handlerbase_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        --force-ignore-with-dependencies 'python' \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $handlerbase_main \
+        $handlerbase_extra
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name exportserverbase_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $exportserverbase_main
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name pr-helper_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $pr_helper
+
+    bazeldnf rpmtree \
+        --public --nobest \
+        --name sidecar-shim_ppc64le${TARGET_SUFFIX} --arch ppc64le \
+        --basesystem ${BASESYSTEM} \
+        ${bazeldnf_repos} \
+        $centos_main \
+        $centos_extra \
+        $sidecar_shim
+
+    # remove all RPMs which are no longer referenced by a rpmtree
+    bazeldnf prune
+fi
+
 # Sandbox regeneration is triggered automatically on next bazel build
 # after the BUILD.bazel hash changes

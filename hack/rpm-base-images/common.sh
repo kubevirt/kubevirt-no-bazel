@@ -35,20 +35,14 @@ get_base_images_for_arch() {
         "testimage"
     )
 
-    # ppc64le builds only the images the core components need, from dnf
-    # Containerfiles in ppc64le/ (there is no bazeldnf for ppc64le)
-    if [[ "${arch_tag}" == "ppc64le" ]]; then
-        images=("launcherbase" "libvirt-devel" "handlerbase" "exportserverbase")
-    else
     # pr-helper not available for s390x
     if [[ "${arch_tag}" != "s390x" ]]; then
         images+=("pr-helper-base")
     fi
 
     # libguestfs-tools only for amd64 and s390x (not arm64)
-    if [[ "${arch_tag}" != "arm64" ]]; then
+    if [[ "${arch_tag}" != "arm64" && "${arch_tag}" != "ppc64le" ]]; then
         images+=("libguestfs-tools-base")
-    fi
     fi
 
     # Allow override via BASE_IMAGE_TARGETS

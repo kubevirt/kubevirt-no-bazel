@@ -44,12 +44,6 @@ container_image_targets() {
     local arch
     arch=$(format_archname "$1" tag) || return 1
 
-    # ppc64le: the core components only, for now
-    if [[ "${arch}" == "ppc64le" ]]; then
-        echo "virt-operator virt-api virt-controller virt-handler virt-launcher virt-exportserver virt-exportproxy virt-synchronization-controller"
-        return
-    fi
-
     local targets="
         virt-operator
         virt-api
@@ -60,8 +54,6 @@ container_image_targets() {
         virt-exportproxy
         virt-synchronization-controller
         alpine-container-disk-demo
-        fedora-with-test-tooling-container-disk
-        alpine-with-test-tooling-container-disk
         vm-killer
         sidecar-shim
         disks-images-provider
@@ -70,8 +62,18 @@ container_image_targets() {
 
     # Bazel's arm64 libguestfs-tools image falls back to the x86_64 layers,
     # so it is not built for arm64.
-    if [[ "${arch}" != "arm64" ]]; then
+    # CentOS Stream 10 has no libguestfs-tools for ppc64le either.
+    if [[ "${arch}" != "arm64" && "${arch}" != "ppc64le" ]]; then
         targets+=" libguestfs-tools"
+    fi
+
+    # These images are re-tagged from quay.io/kubevirtci,
+    # which are not published for ppc64le.
+    if [[ "${arch}" != "ppc64le" ]]; then
+        targets+="
+            fedora-with-test-tooling-container-disk
+            alpine-with-test-tooling-container-disk
+        "
     fi
 
     if [[ "${arch}" == "s390x" ]]; then
@@ -89,19 +91,23 @@ container_image_targets() {
     if [[ "${arch}" != "s390x" ]]; then
         targets+="
             conformance
-            pr-helper
-            example-hook-sidecar
-            example-disk-mutation-hook-sidecar
-            example-cloudinit-hook-sidecar
             example-node-hook-plugin
             test-launcher-hook-sidecar
-            cirros-container-disk-demo
-            cirros-custom-container-disk-demo
-            virtio-container-disk
-            winrmcli
             network-passt-binding
             test-network-vhostuser-dra-binding
         "
+        if [[ "${arch}" != "ppc64le" ]]; then
+            targets+="
+                pr-helper
+                example-hook-sidecar
+                example-disk-mutation-hook-sidecar
+                example-cloudinit-hook-sidecar
+                cirros-container-disk-demo
+                cirros-custom-container-disk-demo
+                virtio-container-disk
+                winrmcli
+            "
+        fi
     fi
 
     echo ${targets}
