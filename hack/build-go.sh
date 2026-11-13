@@ -39,22 +39,38 @@ else
     args=$@
 fi
 
-PLATFORM=$(uname -m)
-case ${PLATFORM} in
-x86_64* | i?86_64* | amd64*)
-    ARCH="amd64"
-    ;;
-aarch64* | arm64*)
-    ARCH="arm64"
-    ;;
-s390x)
-    ARCH="s390x"
-    ;;
-*)
-    echo "invalid Arch, only support x86_64, aarch64 and s390x"
-    exit 1
-    ;;
-esac
+# Binaries are built for BUILD_ARCH when it is set (the container build passes
+# it through), otherwise for the host architecture. The other targets (test,
+# generate, ...) always run on the host.
+HOST_ARCH=$(format_archname "$(uname -m)" tag)
+if [ "${target}" = "install" ]; then
+    ARCH=$(format_archname "${BUILD_ARCH:-$(uname -m)}" tag) || {
+        echo "BUILD_ARCH=${BUILD_ARCH}: build one of amd64, arm64 or s390x at a time" >&2
+        exit 1
+    }
+else
+    ARCH=${HOST_ARCH}
+fi
+
+# The C compiler for cgo and the container-disk binary
+CC=${CC:-gcc}
+
+# Cross-compiling: point cgo at the matching cross compiler. CGO_ENABLED is
+# only defaulted, never overridden, because some images build their binaries
+# with CGO_ENABLED=0 on purpose.
+if [ "${ARCH}" != "${HOST_ARCH}" ]; then
+    case ${ARCH} in
+    amd64) export CC=x86_64-linux-gnu-gcc ;;
+    arm64) export CC=aarch64-linux-gnu-gcc ;;
+    s390x) export CC=s390x-linux-gnu-gcc ;;
+    esac
+    export CGO_ENABLED=${CGO_ENABLED:-1}
+
+    if ! command -v "${CC}" >/dev/null 2>&1; then
+        echo "cross compiler ${CC} not found: cross-compiling from ${HOST_ARCH} to ${ARCH} needs the builder-cross image" >&2
+        exit 1
+    fi
+fi
 
 # forward all commands to all packages if no specific one was requested
 # TODO finetune this a little bit more
@@ -103,9 +119,12 @@ function pkg_dir() {
 # handle binaries
 
 if [ "${target}" = "install" ]; then
-    # Delete all binaries which are not present in the binaries variable to avoid branch inconsistencies
-    to_delete=$(comm -23 <(find ${CMD_OUT_DIR} -mindepth 1 -maxdepth 1 -type d | sort) <(echo $binaries | sed -e 's/cmd\///g' -e 's/ /\n/g' | sed -e "s#^#${CMD_OUT_DIR}/#" | sort))
-    rm -rf ${to_delete}
+    # Delete all binaries which are not present in the binaries variable to avoid branch inconsistencies.
+    # hack/build-image-binaries.sh installs in several calls and keeps them all.
+    if [ "${KUBEVIRT_KEEP_OTHER_BINARIES}" != "true" ]; then
+        to_delete=$(comm -23 <(find ${CMD_OUT_DIR} -mindepth 1 -maxdepth 1 -type d | sort) <(echo $binaries | sed -e 's/cmd\///g' -e 's/ /\n/g' | sed -e "s#^#${CMD_OUT_DIR}/#" | sort))
+        rm -rf ${to_delete}
+    fi
 
     (
         if [ -z "$BIN_NAME" ] || [[ $BIN_NAME == *"container-disk"* ]]; then
@@ -113,7 +132,7 @@ if [ "${target}" = "install" ]; then
             cd cmd/container-disk-v2alpha
             # The containerdisk binary needs to be static, as it runs in a scratch container
             echo "building static binary container-disk"
-            gcc -static -o ${CMD_OUT_DIR}/container-disk-v2alpha/container-disk main.c
+            ${CC} -static -o ${CMD_OUT_DIR}/container-disk-v2alpha/container-disk main.c
         fi
     )
 fi
@@ -137,7 +156,7 @@ for arg in $args; do
         ARCH_BASENAME=${BIN_NAME}-${KUBEVIRT_VERSION}
         mkdir -p ${CMD_OUT_DIR}/${BIN_NAME}
         (
-            go vet ./$arg/...
+            GOOS=linux GOARCH=${ARCH} go vet ./$arg/...
 
             cd $arg
 

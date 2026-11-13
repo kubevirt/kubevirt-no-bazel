@@ -1,0 +1,49 @@
+#
+# This file is part of the KubeVirt project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Copyright The KubeVirt Authors.
+#
+
+# hack/build-image-binaries.sh compiles the programs into _out/cmd/, and
+# hack/build-images-container.sh sets the image build arguments.
+ARG LAUNCHERBASE_IMAGE
+
+FROM ${LAUNCHERBASE_IMAGE}
+
+RUN chmod 755 /etc/libvirt && \
+    mkdir -p /etc/libvirt/hooks && \
+    chown 107:107 /etc/libvirt/hooks && \
+    mkdir -p /usr/lib64/qemu-kvm
+
+COPY --chmod=644 cmd/virt-launcher/qemu.conf /etc/libvirt/qemu.conf
+COPY --chmod=644 cmd/virt-launcher/virtqemud.conf /etc/libvirt/virtqemud.conf
+COPY --chmod=644 cmd/virt-launcher/nsswitch.conf /etc/nsswitch.conf
+COPY --chmod=755 --chown=107:107 _out/cmd/libvirt-hook-client/libvirt-hook-client /etc/libvirt/hooks/qemu
+
+COPY _out/cmd/virt-launcher/virt-launcher /usr/bin/virt-launcher
+COPY _out/cmd/virt-launcher-monitor/virt-launcher-monitor /usr/bin/virt-launcher-monitor
+COPY _out/cmd/virt-freezer/virt-freezer /usr/bin/virt-freezer
+COPY _out/cmd/virt-probe/virt-probe /usr/bin/virt-probe
+COPY _out/cmd/virt-tail/virt-tail /usr/bin/virt-tail
+COPY _out/cmd/container-disk-v2alpha/container-disk /usr/bin/container-disk
+
+# The capability does not survive hack/dockerized copying _out to the host
+RUN setcap cap_net_bind_service=+ep /usr/bin/virt-launcher-monitor
+
+COPY cmd/virt-launcher/node-labeller/node-labeller.sh /usr/bin/node-labeller.sh
+COPY .version /.version
+
+USER 107
+ENTRYPOINT ["/usr/bin/virt-launcher"]
