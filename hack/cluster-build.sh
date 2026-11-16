@@ -54,6 +54,7 @@ if [ -n "${BASE_IMAGE_CHANGES:-}" ]; then
     x86_64) rpm_build_arch="amd64" ;;
     aarch64) rpm_build_arch="arm64" ;;
     s390x) rpm_build_arch="s390x" ;;
+    ppc64le) rpm_build_arch="ppc64le" ;;
     *) rpm_build_arch="amd64" ;;
     esac
 

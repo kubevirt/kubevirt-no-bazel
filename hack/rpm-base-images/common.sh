@@ -41,7 +41,7 @@ get_base_images_for_arch() {
     fi
 
     # libguestfs-tools only for amd64 and s390x (not arm64)
-    if [[ "${arch_tag}" != "arm64" ]]; then
+    if [[ "${arch_tag}" != "arm64" && "${arch_tag}" != "ppc64le" ]]; then
         images+=("libguestfs-tools-base")
     fi
 

@@ -36,6 +36,7 @@ case ${PLATFORM} in
 x86_64* | i?86_64* | amd64*) BUILD_ARCH=${BUILD_ARCH:-amd64} ;;
 aarch64* | arm64*) BUILD_ARCH=${BUILD_ARCH:-arm64} ;;
 s390x) BUILD_ARCH=${BUILD_ARCH:-s390x} ;;
+ppc64le) BUILD_ARCH=${BUILD_ARCH:-ppc64le} ;;
 *)
     echo "Unsupported architecture: ${PLATFORM}"
     exit 1
@@ -66,9 +67,13 @@ build_container_disk() {
 
     # Create Containerfile. The disk is named "downloaded", like the file of
     # the http_file rule that the Bazel image is built from.
+    #
+    # --chmod also applies to the implicit /disk directory. 0440 made it
+    # unreadable to the launcher (UID 107), so use u=rX,g=rX,o=: directories
+    # get execute, the file stays read-only.
     cat >"${CACHE_DIR}/Containerfile.${name}" <<DOCKERFILE
 FROM scratch
-COPY --chown=107:107 --chmod=0440 $(basename "${disk}") ${package_dir}/downloaded
+COPY --chown=107:107 --chmod=u=rX,g=rX,o= $(basename "${disk}") ${package_dir}/downloaded
 DOCKERFILE
 
     # Build image
@@ -101,6 +106,12 @@ s390x)
 
     # Cirros not available for s390x
     echo "Skipping cirros images (not available for s390x)"
+    ;;
+ppc64le)
+    build_container_disk "alpine-container-disk-demo" "alpine_image_ppc64le"
+
+    # Cirros not available for ppc64le
+    echo "Skipping cirros images (not available for ppc64le)"
     ;;
 esac
 
