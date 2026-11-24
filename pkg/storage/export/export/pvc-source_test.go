@@ -41,7 +41,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 
-	backupv1 "kubevirt.io/api/backup/v1alpha1"
+	backupv1 "kubevirt.io/api/backup/v1beta1"
 	virtv1 "kubevirt.io/api/core/v1"
 	exportv1 "kubevirt.io/api/export/v1"
 	instancetypev1beta1 "kubevirt.io/api/instancetype/v1beta1"
@@ -418,4 +418,18 @@ var _ = Describe("PVC source", func() {
 		Entry("PVC claim lost", k8sv1.ClaimLost, k8sv1.ConditionFalse, unknownReason, ""),
 		Entry("PVC pending", k8sv1.ClaimPending, k8sv1.ConditionFalse, pvcPendingReason, ""),
 	)
+
+	It("Should not return manifest data for a PVC source", func() {
+		source := NewPVCSource(&sourceVolumes{})
+
+		key, data, extra, err := source.ManifestData()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(key).To(BeEmpty())
+		Expect(data).To(BeNil())
+		Expect(extra).To(BeNil())
+	})
+
+	It("Should not support OCI export", func() {
+		Expect(NewPVCSource(&sourceVolumes{}).SupportsOCI()).To(BeFalse())
+	})
 })

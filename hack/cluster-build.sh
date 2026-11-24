@@ -23,7 +23,7 @@
 set -e
 
 DOCKER_TAG=${DOCKER_TAG:-devel}
-DOCKER_TAG_ALT=${DOCKER_TAG_ALT:-devel_alt}
+DOCKER_TAG_ALT=${DOCKER_TAG_ALT-devel_alt}
 
 source hack/common.sh
 source kubevirtci/cluster-up/cluster/$KUBEVIRT_PROVIDER/provider.sh

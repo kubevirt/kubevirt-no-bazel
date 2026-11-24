@@ -195,7 +195,7 @@ func (NUMAGuestMappingPassthrough) SwaggerDoc() map[string]string {
 
 func (NUMA) SwaggerDoc() map[string]string {
 	return map[string]string{
-		"guestMappingPassthrough": "GuestMappingPassthrough will create an efficient guest topology based on host CPUs exclusively assigned to a pod.\nThe created topology ensures that memory and CPUs on the virtual numa nodes never cross boundaries of host numa nodes.\n+optional",
+		"guestMappingPassthrough": "GuestMappingPassthrough will create an efficient guest topology based on host CPUs exclusively assigned to a pod.\nThe created topology ensures that memory and CPUs on the virtual numa nodes never cross boundaries of host numa nodes.\nIt is not supported on a VMI with dedicatedCPUPlacement while the CPUsWithDRA feature gate is enabled, because the\nhost CPUs are then assigned by the DRA driver instead of by kubelet's CPU manager.\n+optional",
 	}
 }
 
@@ -279,7 +279,7 @@ func (Devices) SwaggerDoc() map[string]string {
 		"autoattachInputDevice":      "Whether to attach an Input Device.\nDefaults to false.\n+optional",
 		"autoattachVSOCK":            "Whether to attach the VSOCK CID to the VM or not.\nVSOCK access will be available if set to true. Defaults to false.",
 		"rng":                        "Whether to have random number generator from host\n+optional",
-		"blockMultiQueue":            "Whether or not to enable virtio multi-queue for block devices.\nDefaults to false.\n+optional",
+		"blockMultiQueue":            "Whether or not to enable virtio multi-queue for block devices.\nExplicit false configures a single request queue.\nWhen omitted, the queue count depends on device and IOThread\nconfiguration, falling back to hypervisor defaults when unspecified.\n+optional",
 		"networkInterfaceMultiqueue": "If specified, virtual network interfaces configured with a virtio bus will also enable the vhost multiqueue feature for network devices. The number of queues created depends on additional factors of the VirtualMachineInstance, like the number of guest CPUs.\n+optional",
 		"gpus":                       "Whether to attach a GPU device to the vmi.\n+optional\n+listType=atomic",
 		"downwardMetrics":            "DownwardMetrics creates a virtio serials for exposing the downward metrics to the vmi.\n+optional",
@@ -502,7 +502,7 @@ func (VolumeSource) SwaggerDoc() map[string]string {
 		"downwardAPI":           "DownwardAPI represents downward API about the pod that should populate this volume\n+optional",
 		"serviceAccount":        "ServiceAccountVolumeSource represents a reference to a service account.\nThere can only be one volume of this type!\nMore info: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/\n+optional",
 		"downwardMetrics":       "DownwardMetrics adds a very small disk to VMIs which contains a limited view of host and guest\nmetrics. The disk content is compatible with vhostmd (https://github.com/vhostmd/vhostmd) and vm-dump-metrics.",
-		"memoryDump":            "MemoryDump is attached to the virt launcher and is populated with a memory dump of the vmi",
+		"memoryDump":            "MemoryDump is attached to the virt launcher and is populated with a memory dump of the vmi\nDeprecated: memory dumps are attached as utility volumes of type MemoryDump.",
 		"containerPath":         "ContainerPath exposes a path from the virt-launcher container to the VM via virtiofs.\nThe path must correspond to an existing volumeMount in the compute container.\n+optional",
 	}
 }
@@ -530,7 +530,9 @@ func (PersistentVolumeClaimVolumeSource) SwaggerDoc() map[string]string {
 }
 
 func (MemoryDumpVolumeSource) SwaggerDoc() map[string]string {
-	return map[string]string{}
+	return map[string]string{
+		"": "MemoryDumpVolumeSource represents a memory dump PVC in the volumes of a VMI.\nDeprecated: memory dumps are attached as utility volumes of type MemoryDump.",
+	}
 }
 
 func (EphemeralVolumeSource) SwaggerDoc() map[string]string {

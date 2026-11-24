@@ -21,9 +21,14 @@ var (
 
 	/* HW */
 
-	GPU             = Label("GPU")
-	VGPU            = Label("VGPU")
-	DRAGPU          = Label("DRA-GPU")
+	GPU    = Label("GPU")
+	VGPU   = Label("VGPU")
+	DRAGPU = Label("DRA-GPU")
+	// DRACEX is CEX AP-queue passthrough via Kubernetes DRA.
+	// These tests require s390x and the CEX DRA driver; see TARGET sig-compute-dra-cex.
+	DRACEX          = Label("DRA-CEX")
+	DRANetwork      = Label("DRA-Network")
+	DRACPU          = Label("DRA-CPU")
 	SEV             = Label("SEV")
 	SEVES           = Label("SEVES")
 	SEVSNP          = Label("SEVSNP")
@@ -107,6 +112,8 @@ var (
 
 	// RequiresBlockStorage requires a storage class with Block storage support
 	RequiresBlockStorage = Label("RequiresBlockStorage")
+	// RequiresRWOFileSystemStorageClass requires a storage class with ReadWriteOnce Filesystem support
+	RequiresRWOFileSystemStorageClass = Label("RequiresRWOFileSystemStorageClass")
 	// StorageCritical tests that ensure sig-storage functionality which are conformance-unready
 	StorageCritical = Label("StorageCritical")
 	// RequiresVolumeExpansion requires a storage class with volume expansion support
@@ -129,9 +136,10 @@ var (
 	WgS390x = Label("wg-s390x")
 	WgArm64 = Label("wg-arm64")
 
-	RequiresAMD64 = Label("requires-amd64")
-	RequiresS390X = Label("requires-s390x")
-	RequiresARM64 = Label("requires-arm64")
+	RequiresAMD64           = Label("requires-amd64")
+	RequiresS390X           = Label("requires-s390x")
+	RequiresARM64           = Label("requires-arm64")
+	RequiresARM64SecureBoot = Label("requires-arm64-secure-boot")
 
 	RequiresCrossArchEmulation = Label("requires-cross-arch-emulation")
 

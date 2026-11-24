@@ -39,6 +39,10 @@ type cacheCreator interface {
 	New(filePath string) *cache.Cache
 }
 
+type libvirtSpecGenerator interface {
+	Generate() error
+}
+
 type DHCPConfiguratorFactory func(iface *v1.Interface, network *v1.Network, podInterfaceName string) dhcpconfigurator.Configurator
 
 type VMNetworkConfigurator struct {
@@ -95,22 +99,42 @@ func (n *VMNetworkConfigurator) SetupPodNetworkPhase2(domain *api.Domain, networ
 			return fmt.Errorf("no iface matching with network %s", networks[i].Name)
 		}
 
-		if n.domainAttachments[iface.Name] != string(v1.Tap) {
-			continue
-		}
+		switch {
+		case n.domainAttachments[iface.Name] == string(v1.Tap):
+			podIfaceName, err := n.decorateDomainInterface(&networks[i], func(podIfaceName string) libvirtSpecGenerator {
+				return domainspec.NewTapLibvirtSpecGenerator(iface, networks[i], domain, podIfaceName, n.handler)
+			})
+			if err != nil {
+				return err
+			}
 
-		podIfaceName, err := n.discoverPodInterfaceName(&networks[i])
-		if err != nil {
-			return err
-		}
+			if err := n.ensureDHCP(iface, &networks[i], podIfaceName); err != nil {
+				return err
+			}
 
-		n.enrichTapDomainInterface(domain, iface, &networks[i], podIfaceName)
-
-		if err := n.ensureDHCP(iface, &networks[i], podIfaceName); err != nil {
-			return err
+		case iface.PasstBinding != nil:
+			if _, err := n.decorateDomainInterface(&networks[i], func(podIfaceName string) libvirtSpecGenerator {
+				return domainspec.NewPasstLibvirtSpecGenerator(iface, networks[i], domain, podIfaceName, n.handler)
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func (n *VMNetworkConfigurator) decorateDomainInterface(
+	network *v1.Network,
+	generatorFunc func(podIfaceName string) libvirtSpecGenerator,
+) (string, error) {
+	podIfaceName, err := n.discoverPodInterfaceName(network)
+	if err != nil {
+		return "", err
+	}
+	if err = generatorFunc(podIfaceName).Generate(); err != nil {
+		log.Log.Reason(err).Critical("failed to create libvirt configuration")
+	}
+	return podIfaceName, nil
 }
 
 func (n *VMNetworkConfigurator) discoverPodInterfaceName(network *v1.Network) (string, error) {
@@ -122,18 +146,6 @@ func (n *VMNetworkConfigurator) discoverPodInterfaceName(network *v1.Network) (s
 		return "", nil
 	}
 	return ifaceLink.Attrs().Name, nil
-}
-
-func (n *VMNetworkConfigurator) enrichTapDomainInterface(
-	domain *api.Domain,
-	iface *v1.Interface,
-	network *v1.Network,
-	podIfaceName string,
-) {
-	generator := domainspec.NewTapLibvirtSpecGenerator(iface, *network, domain, podIfaceName, n.handler)
-	if err := generator.Generate(); err != nil {
-		log.Log.Reason(err).Critical("failed to create libvirt configuration")
-	}
 }
 
 func (n *VMNetworkConfigurator) ensureDHCP(iface *v1.Interface, network *v1.Network, podIfaceName string) error {

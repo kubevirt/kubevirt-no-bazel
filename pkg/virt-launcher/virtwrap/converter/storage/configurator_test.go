@@ -560,42 +560,6 @@ var _ = Describe("DiskConfigurator", func() {
 			Expect(domain).To(Equal(expectedDomain))
 		})
 
-		It("should convert a HostDisk volume with CBT", func() {
-			vmi := libvmi.New(
-				libvmi.WithHostDisk("myhostdisk", "/data/disk.img", v1.HostDiskExistsOrCreate),
-			)
-			configurator := storage.NewDiskConfigurator(
-				storage.DiskWithArchitecture(amd64),
-				storage.DiskWithVirtioModel(virtioModel),
-				storage.DiskWithPermanentVolumes(map[string]v1.VolumeStatus{"myhostdisk": {}}),
-				storage.DiskWithApplyCBT(map[string]string{"myhostdisk": "/cbt/myhostdisk.qcow2"}),
-			)
-			var domain api.Domain
-
-			Expect(configurator.Configure(vmi, &domain)).To(Succeed())
-
-			expectedDomain := newDomainWithDisks(newDisk("myhostdisk",
-				diskWithDevice("disk"),
-				diskWithType("file"),
-				diskWithSource(api.DiskSource{
-					File: "/cbt/myhostdisk.qcow2",
-					DataStore: &api.DataStore{
-						Type: "file",
-						Format: &api.DataStoreFormat{
-							Type: "raw",
-						},
-						Source: &api.DiskSource{
-							File: hostdisk.GetMountedHostDiskPath("myhostdisk", "/data/disk.img"),
-						},
-					},
-				}),
-				diskWithTarget(api.DiskTarget{Bus: v1.DiskBusVirtio, Device: "vda"}),
-				diskWithDriver(api.DiskDriver{Name: "qemu", Type: "qcow2", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap"}),
-				diskWithModel(virtioModel),
-			))
-			Expect(domain).To(Equal(expectedDomain))
-		})
-
 		It("should convert a Sysprep volume", func() {
 			vmi := libvmi.New(
 				libvmi.WithSysprepConfigMap("mysysprep", "my-config"),
@@ -907,30 +871,6 @@ var _ = Describe("DiskConfigurator", func() {
 			Expect(domain).To(Equal(expectedDomain))
 		})
 
-		It("should convert a hotplug HostDisk via the hotplug PVC path", func() {
-			vmi := libvmi.New(
-				libvmi.WithHostDisk("hotplug-hd", "/data/disk.img", v1.HostDiskExistsOrCreate),
-			)
-			configurator := storage.NewDiskConfigurator(
-				storage.DiskWithArchitecture(amd64),
-				storage.DiskWithVirtioModel(virtioModel),
-				storage.DiskWithHotplugVolumes(map[string]v1.VolumeStatus{"hotplug-hd": {Phase: v1.HotplugVolumeMounted}}),
-			)
-			var domain api.Domain
-
-			Expect(configurator.Configure(vmi, &domain)).To(Succeed())
-
-			expectedDomain := newDomainWithDisks(newDisk("hotplug-hd",
-				diskWithDevice("disk"),
-				diskWithType("file"),
-				diskWithSource(api.DiskSource{File: volumepath.HotplugFilesystem("hotplug-hd")}),
-				diskWithTarget(api.DiskTarget{Bus: v1.DiskBusVirtio, Device: "vda"}),
-				diskWithDriver(api.DiskDriver{Name: "qemu", Type: "raw", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap"}),
-				diskWithModel(virtioModel),
-			))
-			Expect(domain).To(Equal(expectedDomain))
-		})
-
 		It("should convert an empty CDRom with no matching volume", func() {
 			vmi := libvmi.New(
 				libvmi.WithEmptyCDRom(v1.DiskBusSATA, "mycdrom"),
@@ -1022,31 +962,67 @@ var _ = Describe("DiskConfigurator", func() {
 			Entry("Disk-type disk", libvmi.WithPersistentVolumeClaim("myvol", "my-claim", libvmi.WithDiskBus(v1.DiskBusSCSI)), "disk"),
 		)
 
-		It("should assign queues when block multi-queue is enabled", func() {
-			vmi := libvmi.New(
-				libvmi.WithPersistentVolumeClaim("mypvc", "my-claim"),
-				libvmi.WithBlockMultiQueue(),
-				libvmi.WithCPUCount(2, 1, 1),
-			)
-			configurator := storage.NewDiskConfigurator(
-				storage.DiskWithArchitecture(amd64),
-				storage.DiskWithVirtioModel(virtioModel),
-				storage.DiskWithPermanentVolumes(map[string]v1.VolumeStatus{"mypvc": {}}),
-			)
-			var domain api.Domain
+		DescribeTable("should respect block multi-queue settings on disks",
+			func(setting *bool, bus v1.DiskBus, cpuTopology libvmi.Option, expectedQueues *uint) {
+				vmi := libvmi.New(
+					libvmi.WithPersistentVolumeClaim("mypvc", "my-claim", libvmi.WithDiskBus(bus)),
+					cpuTopology,
+				)
+				vmi.Spec.Domain.Devices.BlockMultiQueue = setting
+				configurator := storage.NewDiskConfigurator(
+					storage.DiskWithArchitecture(amd64),
+					storage.DiskWithVirtioModel(virtioModel),
+					storage.DiskWithPermanentVolumes(map[string]v1.VolumeStatus{"mypvc": {}}),
+				)
+				var domain api.Domain
+				Expect(configurator.Configure(vmi, &domain)).To(Succeed())
+				Expect(domain.Spec.Devices.Disks).To(HaveLen(1))
+				Expect(domain.Spec.Devices.Disks[0].Driver.Queues).To(Equal(expectedQueues))
 
-			Expect(configurator.Configure(vmi, &domain)).To(Succeed())
+				target := api.DiskTarget{Bus: bus, Device: "sda"}
+				model := ""
+				if bus == v1.DiskBusVirtio {
+					target.Device = "vda"
+					model = virtioModel
+				}
+				expectedDisk := newDisk("mypvc",
+					diskWithDevice("disk"),
+					diskWithType("file"),
+					diskWithSource(api.DiskSource{File: volumepath.Filesystem("mypvc")}),
+					diskWithTarget(target),
+					diskWithDriver(api.DiskDriver{
+						Name: "qemu", Type: "raw", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap", Queues: expectedQueues,
+					}),
+					diskWithModel(model),
+				)
+				if bus == v1.DiskBusSCSI {
+					expectedDisk.Address = &api.Address{Type: "drive", Controller: "0", Bus: "0", Unit: "0"}
+				}
+				Expect(domain).To(Equal(newDomainWithDisks(expectedDisk)))
+			},
+			Entry("enabled with two vCPUs", new(true), v1.DiskBusVirtio, libvmi.WithCPUCount(2, 1, 1), new(uint(2))),
+			Entry("omitted keeps queues unspecified", nil, v1.DiskBusVirtio, libvmi.WithCPUCount(1, 2, 3), nil),
+			Entry("false requests one virtio-blk queue", new(false), v1.DiskBusVirtio, libvmi.WithCPUCount(1, 2, 3), new(uint(1))),
+			Entry("true uses the complete CPU topology", new(true), v1.DiskBusVirtio, libvmi.WithCPUCount(1, 2, 3), new(uint(6))),
+			Entry("false adds no queues to a SCSI disk", new(false), v1.DiskBusSCSI, libvmi.WithCPUCount(1, 2, 3), nil),
+			Entry("true adds no queues to a SCSI disk", new(true), v1.DiskBusSCSI, libvmi.WithCPUCount(1, 2, 3), nil),
+			Entry("false adds no queues to a SATA disk", new(false), v1.DiskBusSATA, libvmi.WithCPUCount(1, 2, 3), nil),
+		)
 
-			expectedDomain := newDomainWithDisks(newDisk("mypvc",
-				diskWithDevice("disk"),
-				diskWithType("file"),
-				diskWithSource(api.DiskSource{File: volumepath.Filesystem("mypvc")}),
-				diskWithTarget(api.DiskTarget{Bus: v1.DiskBusVirtio, Device: "vda"}),
-				diskWithDriver(api.DiskDriver{Name: "qemu", Type: "raw", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap", Queues: new(uint(2))}),
-				diskWithModel(virtioModel),
-			))
-			Expect(domain).To(Equal(expectedDomain))
-		})
+		DescribeTable("should preserve queue settings after DownwardMetrics volume conversion",
+			func(setting *bool, expectedQueues *uint) {
+				vmi := libvmi.New(libvmi.WithDownwardMetricsVolume("metrics"), libvmi.WithCPUCount(2, 1, 1))
+				vmi.Spec.Domain.Devices.BlockMultiQueue = setting
+				configurator := storage.NewDiskConfigurator(storage.DiskWithArchitecture(amd64))
+				var domain api.Domain
+				Expect(configurator.Configure(vmi, &domain)).To(Succeed())
+				Expect(domain.Spec.Devices.Disks).To(HaveLen(1))
+				Expect(domain.Spec.Devices.Disks[0].Driver.Queues).To(Equal(expectedQueues))
+			},
+			Entry("omitted keeps queues unspecified", nil, nil),
+			Entry("true keeps existing driver replacement behavior", new(true), nil),
+			Entry("false requests one queue", new(false), new(uint(1))),
+		)
 
 		It("should set disk IO mode when requested", func() {
 			vmi := libvmi.New(
@@ -1470,6 +1446,65 @@ var _ = Describe("DiskConfigurator", func() {
 				}),
 				diskWithModel(virtioModel),
 			))
+			Expect(domain).To(Equal(expectedDomain))
+		})
+
+		It("should keep dedicated IOThreads exclusive under multi-IO auto policy", func() {
+			vmi := libvmi.New(
+				libvmi.WithCPURequest("2"),
+				libvmi.WithPersistentVolumeClaim("auto-disk1", "claim1"),
+				libvmi.WithPersistentVolumeClaim("auto-disk2", "claim2"),
+				libvmi.WithPersistentVolumeClaim("dedicated-disk", "claim3", libvmi.WithDedicatedIOThreads(true)),
+				libvmi.WithIOThreadsPolicy(v1.IOThreadsPolicyAuto),
+			)
+			configurator := storage.NewDiskConfigurator(
+				storage.DiskWithArchitecture(amd64),
+				storage.DiskWithVirtioModel(virtioModel),
+				storage.DiskWithPermanentVolumes(map[string]v1.VolumeStatus{
+					"auto-disk1": {}, "auto-disk2": {}, "dedicated-disk": {},
+				}),
+				storage.DiskWithScsiMultiIOThreadEnabled(true),
+				storage.DiskWithMultiIOThreadAutoPolicyEnabled(true),
+			)
+			var domain api.Domain
+
+			Expect(configurator.Configure(vmi, &domain)).To(Succeed())
+
+			autoPool := &api.DiskIOThreads{
+				IOThread: []api.DiskIOThread{{Id: 1}, {Id: 2}},
+			}
+			expectedDomain := newDomainWithDisks(
+				newDisk("auto-disk1",
+					diskWithDevice("disk"), diskWithType("file"),
+					diskWithSource(api.DiskSource{File: volumepath.Filesystem("auto-disk1")}),
+					diskWithTarget(api.DiskTarget{Bus: v1.DiskBusVirtio, Device: "vda"}),
+					diskWithDriver(api.DiskDriver{
+						Name: "qemu", Type: "raw", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap",
+						IOThreads: autoPool,
+					}),
+					diskWithModel(virtioModel),
+				),
+				newDisk("auto-disk2",
+					diskWithDevice("disk"), diskWithType("file"),
+					diskWithSource(api.DiskSource{File: volumepath.Filesystem("auto-disk2")}),
+					diskWithTarget(api.DiskTarget{Bus: v1.DiskBusVirtio, Device: "vdb"}),
+					diskWithDriver(api.DiskDriver{
+						Name: "qemu", Type: "raw", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap",
+						IOThreads: autoPool,
+					}),
+					diskWithModel(virtioModel),
+				),
+				newDisk("dedicated-disk",
+					diskWithDevice("disk"), diskWithType("file"),
+					diskWithSource(api.DiskSource{File: volumepath.Filesystem("dedicated-disk")}),
+					diskWithTarget(api.DiskTarget{Bus: v1.DiskBusVirtio, Device: "vdc"}),
+					diskWithDriver(api.DiskDriver{
+						Name: "qemu", Type: "raw", ErrorPolicy: v1.DiskErrorPolicyStop, Discard: "unmap",
+						IOThread: new(uint(3)),
+					}),
+					diskWithModel(virtioModel),
+				),
+			)
 			Expect(domain).To(Equal(expectedDomain))
 		})
 	})

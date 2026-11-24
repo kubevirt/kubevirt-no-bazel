@@ -67,6 +67,8 @@ var (
 type snapshotSource interface {
 	UpdateSourceState() error
 	UID() types.UID
+	Deleting() bool
+	VirtualMachine() *kubevirtv1.VirtualMachine
 	Locked() bool
 	LockMsg() string
 	Lock() (bool, error)
@@ -134,6 +136,14 @@ func (s *vmSnapshotSource) UID() types.UID {
 	return s.vm.UID
 }
 
+func (s *vmSnapshotSource) Deleting() bool {
+	return s.vm.DeletionTimestamp != nil
+}
+
+func (s *vmSnapshotSource) VirtualMachine() *kubevirtv1.VirtualMachine {
+	return s.vm
+}
+
 func (s *vmSnapshotSource) Locked() bool {
 	return s.state.locked
 }
@@ -184,6 +194,12 @@ func (s *vmSnapshotSource) Lock() (bool, error) {
 
 	if s.vm.Status.SnapshotInProgress != nil && *s.vm.Status.SnapshotInProgress != s.snapshot.Name {
 		s.state.lockMsg += fmt.Sprintf(" snapshot %q in progress", *s.vm.Status.SnapshotInProgress)
+		log.Log.V(3).Info(s.state.lockMsg)
+		return false, nil
+	}
+
+	if s.vm.Status.SnapshotInProgress == nil && s.vm.Status.BackupInProgress != nil {
+		s.state.lockMsg += fmt.Sprintf(" backup %q in progress", *s.vm.Status.BackupInProgress)
 		log.Log.V(3).Info(s.state.lockMsg)
 		return false, nil
 	}

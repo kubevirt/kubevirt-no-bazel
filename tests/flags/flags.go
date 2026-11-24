@@ -53,6 +53,7 @@ var ApplyDefaulte2eConfiguration bool
 
 var DeployFakeKWOKNodesFlag = false
 var DeployTestingInfrastructureFlag = false
+var SkipClusterWideWorkloadReadiness = false
 var PathToTestingInfrastrucureManifests = ""
 var DNSServiceName = ""
 var DNSServiceNamespace = ""
@@ -60,6 +61,7 @@ var DNSServiceNamespace = ""
 var MigrationNetworkNIC = "eth1"
 var MigrationNetworkName string
 var EmulatedSRIOV bool
+var EmulatedVGPUMDEV bool
 var PrimaryNetworkBindingPlugin string
 var OrasTestArtifactImage = "quay.io/vladikr/alpine-oras-artifact:devel"
 
@@ -79,6 +81,7 @@ func init() {
 	flag.StringVar(&PrometheusNamespace, "prometheus-installed-namespace", "monitoring", "Set the namespace Prometheus is installed in")
 	flag.BoolVar(&DeployFakeKWOKNodesFlag, "deploy-fake-kwok-nodes", false, "Deploy fake KWOK nodes to test performance.")
 	flag.BoolVar(&DeployTestingInfrastructureFlag, "deploy-testing-infra", false, "Deploy testing infrastructure if set")
+	flag.BoolVar(&SkipClusterWideWorkloadReadiness, "skip-cluster-wide-workload-readiness", false, "Skip cluster-wide Pod and DaemonSet readiness waits when deploying testing infrastructure")
 	flag.StringVar(&PathToTestingInfrastrucureManifests, "path-to-testing-infra-manifests", "manifests/testing", "Set path to testing infrastructure manifests")
 	flag.StringVar(&PreviousReleaseTag, "previous-release-tag", "", "Set tag of the release to test updating from")
 	flag.StringVar(&PreviousReleaseRegistry, "previous-release-registry", "quay.io/kubevirt", "Set registry of the release to test updating from")
@@ -97,6 +100,7 @@ func init() {
 	flag.StringVar(&MigrationNetworkNIC, "migration-network-nic", "eth1", "NIC to use on cluster nodes to access the dedicated migration network")
 	flag.StringVar(&MigrationNetworkName, "migration-network-name", "", "name of the NetworkAttachmentDefinition CR to be used for dedicated migration network tests")
 	flag.BoolVar(&EmulatedSRIOV, "emulated-sriov", false, "Run SR-IOV tests in emulated mode")
+	flag.BoolVar(&EmulatedVGPUMDEV, "emulated-vgpu-mdev", false, "Run vGPU mediated-device tests with the emulated vGPU driver")
 	flag.StringVar(&PrimaryNetworkBindingPlugin, "primary-network-binding-plugin", "", "Name of a pre-registered network binding plugin to use instead of masquerade in conformance tests")
 	flag.StringVar(&OrasTestArtifactImage, "oras-test-artifact-image", OrasTestArtifactImage, "OCI artifact image for ORAS functional tests")
 }

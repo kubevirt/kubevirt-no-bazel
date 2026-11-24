@@ -706,6 +706,9 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			allKvInfraPodsAreReady(originalKv)
 			sanityCheckDeploymentsExist()
 
+			// Fetch kubevirt-operator.yaml manifest from previous release before uninstall the current one.
+			manifestPath := getUpstreamReleaseAsset(previousImageTag, "kubevirt-operator.yaml")
+
 			// Delete current KubeVirt install so we can install previous release.
 			By("Deleting KubeVirt object")
 			deleteAllKvAndWait(false, originalKv.Name)
@@ -727,8 +730,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 				Expect(err).ToNot(HaveOccurred(), "failed to delete virt-operator installation: "+stderr)
 
 				By("Installing previous release of virt-operator")
-				manifestURL := getUpstreamReleaseAssetURL(previousImageTag, "kubevirt-operator.yaml")
-				installOperator(manifestURL)
+				installOperator(manifestPath)
 			}
 
 			// Install previous release of KubeVirt
@@ -2373,6 +2375,82 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			verifyAggregateLabels(kubevirt.Client(), "true")
 		})
 	})
+
+	Context("virt-exportproxy Route", decorators.OpenShift, func() {
+		const (
+			externalRouteAnnotation      = "haproxy.router.openshift.io/timeout"
+			externalRouteAnnotationValue = "60m"
+		)
+
+		It("should preserve additional annotations across reconciliation", func() {
+			routes := virtClient.RouteClient().
+				Routes(flags.KubeVirtInstallNamespace)
+
+			route, err := routes.Get(
+				context.Background(),
+				components.VirtExportProxyName,
+				metav1.GetOptions{},
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			expectedCABundle := route.Spec.TLS.DestinationCACertificate
+
+			DeferCleanup(func() {
+				route, err := routes.Get(
+					context.Background(),
+					components.VirtExportProxyName,
+					metav1.GetOptions{},
+				)
+				Expect(err).ToNot(HaveOccurred())
+
+				delete(route.Annotations, externalRouteAnnotation)
+				route.Spec.TLS.DestinationCACertificate = expectedCABundle
+
+				_, err = routes.Update(
+					context.Background(),
+					route,
+					metav1.UpdateOptions{},
+				)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			if route.Annotations == nil {
+				route.Annotations = map[string]string{}
+			}
+
+			route.Annotations[externalRouteAnnotation] = externalRouteAnnotationValue
+
+			// Force Route reconciliation by simulating a stale CA bundle.
+			route.Spec.TLS.DestinationCACertificate = "stale-ca"
+
+			_, err = routes.Update(
+				context.Background(),
+				route,
+				metav1.UpdateOptions{},
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				route, err := routes.Get(
+					context.Background(),
+					components.VirtExportProxyName,
+					metav1.GetOptions{},
+				)
+				g.Expect(err).ToNot(HaveOccurred(),
+					"failed to retrieve virt-exportproxy Route")
+
+				g.Expect(route.Spec.TLS.DestinationCACertificate).To(
+					Equal(expectedCABundle),
+					"virt-exportproxy Route CA bundle was not reconciled",
+				)
+
+				g.Expect(route.Annotations).To(
+					HaveKeyWithValue(externalRouteAnnotation, externalRouteAnnotationValue),
+					"virt-exportproxy Route did not preserve the additional annotation",
+				)
+			}, 60*time.Second, time.Second).Should(Succeed())
+		})
+	})
 })
 
 func patchCRD(orig *extv1.CustomResourceDefinition, modified *extv1.CustomResourceDefinition) []byte {
@@ -2429,7 +2507,8 @@ func verifyOperatorWebhookCertificate() {
 	libinfra.EnsurePodsCertIsSynced(fmt.Sprintf("%s=%s", v1.AppLabel, "virt-operator"), flags.KubeVirtInstallNamespace, "8444")
 }
 
-func getUpstreamReleaseAssetURL(tag string, assetName string) string {
+func getUpstreamReleaseAsset(tag string, assetName string) string {
+	GinkgoHelper()
 	client := github.NewClient(&http.Client{
 		Timeout: 5 * time.Second,
 	})
@@ -2444,12 +2523,42 @@ func getUpstreamReleaseAssetURL(tag string, assetName string) string {
 
 	for _, asset := range release.Assets {
 		if asset.GetName() == assetName {
-			return asset.GetBrowserDownloadURL()
+			return downloadUpstreamReleaseAsset(asset.GetBrowserDownloadURL(), assetName)
 		}
 	}
 
 	Fail(fmt.Sprintf("Asset %s not found in release %s of kubevirt upstream repo", assetName, tag))
 	return ""
+}
+
+func downloadUpstreamReleaseAsset(url string, assetName string) string {
+	GinkgoHelper()
+	client := &http.Client{Timeout: 1 * time.Minute}
+	var f *os.File
+	const pollingTimeout = 2 * time.Minute
+	const pollingInterval = 5 * time.Second
+	Eventually(func() error {
+		resp, err := client.Get(url)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			defer resp.Body.Close()
+			return fmt.Errorf("unexpected status code %d when downloading asset %s", resp.StatusCode, assetName)
+		}
+		defer resp.Body.Close()
+
+		f, err = os.Create(filepath.Join(GinkgoT().TempDir(), fmt.Sprintf("kubevirt-%s-", assetName)))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		_, err = io.Copy(f, resp.Body)
+		return err
+	}).WithPolling(pollingInterval).WithTimeout(pollingTimeout).ShouldNot(HaveOccurred())
+
+	return f.Name()
 }
 
 func atLeastOnePendingPodExistInDeployment(virtClient kubecli.KubevirtClient, deploymentName string) bool {

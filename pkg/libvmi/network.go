@@ -108,6 +108,13 @@ func WithPorts(ports ...kvirtv1.Port) InterfaceOption {
 	}
 }
 
+// WithPortRanges sets the port ranges.
+func WithPortRanges(portRanges ...kvirtv1.PortRange) InterfaceOption {
+	return func(iface *kvirtv1.Interface) {
+		iface.PortRanges = portRanges
+	}
+}
+
 // WithACPIIndex sets the ACPI index.
 func WithACPIIndex(acpiIdx int) InterfaceOption {
 	return func(iface *kvirtv1.Interface) {
@@ -144,20 +151,29 @@ func WithState(state kvirtv1.InterfaceState) InterfaceOption {
 }
 
 // InterfaceDeviceWithMasqueradeBinding returns an Interface named "default" with masquerade binding.
+//
+// Deprecated: use NewInterface(name, WithMasqueradeBinding()) instead.
 func InterfaceDeviceWithMasqueradeBinding(ports ...kvirtv1.Port) kvirtv1.Interface {
 	return NewInterface(kvirtv1.DefaultPodNetwork().Name, WithMasqueradeBinding(), WithPorts(ports...))
 }
 
 // InterfaceDeviceWithBridgeBinding returns an Interface with bridge binding.
+//
+// Deprecated: use NewInterface(name, WithBridgeBinding()) instead.
 func InterfaceDeviceWithBridgeBinding(name string) kvirtv1.Interface {
 	return NewInterface(name, WithBridgeBinding())
 }
 
 // InterfaceDeviceWithSRIOVBinding returns an Interface with SRIOV binding.
+//
+// Deprecated: use NewInterface(name, WithSRIOVBinding()) instead.
 func InterfaceDeviceWithSRIOVBinding(name string) kvirtv1.Interface {
 	return NewInterface(name, WithSRIOVBinding())
 }
 
+// InterfaceWithBindingPlugin returns an Interface with a plugin binding.
+//
+// Deprecated: use NewInterface(name, WithBindingPlugin(binding)) instead.
 func InterfaceWithBindingPlugin(name string, binding kvirtv1.PluginBinding, ports ...kvirtv1.Port) kvirtv1.Interface {
 	return NewInterface(name, WithBindingPlugin(binding), WithPorts(ports...))
 }
@@ -184,6 +200,14 @@ func DRANetwork(name, claimName, requestName string) *kvirtv1.Network {
 				RequestName: requestName,
 			},
 		},
+	}
+}
+
+// PodNetwork returns a pod Network with the given name.
+func PodNetwork(name string) *kvirtv1.Network {
+	return &kvirtv1.Network{
+		Name:          name,
+		NetworkSource: kvirtv1.NetworkSource{Pod: &kvirtv1.PodNetwork{}},
 	}
 }
 

@@ -114,6 +114,10 @@ func (config *ClusterConfig) WorkloadEncryptionTDXEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.WorkloadEncryptionTDX)
 }
 
+func (config *ClusterConfig) ARM64SecureBootEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.ARM64SecureBoot)
+}
+
 func (config *ClusterConfig) DockerSELinuxMCSWorkaroundEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.DockerSELinuxMCSWorkaround)
 }
@@ -166,6 +170,10 @@ func (config *ClusterConfig) HostDevicesWithDRAEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.HostDevicesWithDRAGate)
 }
 
+func (config *ClusterConfig) CPUsWithDRAGateEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.CPUsWithDRAGate)
+}
+
 func (config *ClusterConfig) ConfigurableHypervisorEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.ConfigurableHypervisor)
 }
@@ -192,6 +200,15 @@ func (config *ClusterConfig) IncrementalBackupEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.IncrementalBackupGate)
 }
 
+func (config *ClusterConfig) ExternalVMSnapshotEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.ExternalVMSnapshotGate)
+}
+
+func (config *ClusterConfig) OfflineIncrementalBackupEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.OfflineIncrementalBackupGate) &&
+		config.IncrementalBackupEnabled()
+}
+
 func (config *ClusterConfig) RebootPolicyEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.RebootPolicy)
 }
@@ -216,8 +233,8 @@ func (config *ClusterConfig) OptOutRoleAggregationEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.OptOutRoleAggregation)
 }
 
-func (config *ClusterConfig) VGPULiveMigrationEnabled() bool {
-	return config.IsFeatureGateEnabled(featuregate.VGPULiveMigration)
+func (config *ClusterConfig) MDevVGPULiveMigrationEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.MDevVGPULiveMigration)
 }
 
 func (config *ClusterConfig) VMStatsCollectorEnabled() bool {
@@ -246,4 +263,16 @@ func (config *ClusterConfig) MigrationStallDetectionEnabled() bool {
 
 func (config *ClusterConfig) MigrationDowntimeTuningEnabled() bool {
 	return config.IsFeatureGateEnabled(featuregate.MigrationDowntimeTuning)
+}
+
+func (config *ClusterConfig) TLSGroupPreferencesEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.TLSGroupPreferences)
+}
+
+func (config *ClusterConfig) SCSIMultiIOThreadEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.SCSIMultiIOThread)
+}
+
+func (config *ClusterConfig) DeclarativeVMStateEnabled() bool {
+	return config.IsFeatureGateEnabled(featuregate.DeclarativeVMState)
 }

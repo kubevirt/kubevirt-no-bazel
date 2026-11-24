@@ -54,9 +54,10 @@ type domainWatcher struct {
 	recorder            record.EventRecorder
 	consecutiveFails    *int
 	unresponsiveSockets map[string]int64
+	ghostRecordStore    *GhostRecordStore
 }
 
-func newDomainWatcher(ctx context.Context, runNotifyServer runServerFunc, watchdogTimeout int, resyncPeriod time.Duration, recorder record.EventRecorder, consecutiveFails *int) *domainWatcher {
+func newDomainWatcher(ctx context.Context, runNotifyServer runServerFunc, watchdogTimeout int, resyncPeriod time.Duration, recorder record.EventRecorder, consecutiveFails *int, ghostRecordStore *GhostRecordStore) *domainWatcher {
 	ctx, cancel := context.WithCancel(ctx)
 	d := &domainWatcher{
 		recorder:            recorder,
@@ -64,6 +65,7 @@ func newDomainWatcher(ctx context.Context, runNotifyServer runServerFunc, watchd
 		consecutiveFails:    consecutiveFails,
 		result:              make(chan watch.Event, 100),
 		cancel:              cancel,
+		ghostRecordStore:    ghostRecordStore,
 	}
 	d.wg.Add(1)
 	go d.worker(ctx, runNotifyServer, resyncPeriod, watchdogTimeout)
@@ -152,7 +154,7 @@ func (d *domainWatcher) recordNotifyServerFailureEvent(err error) {
 }
 
 func (d *domainWatcher) handleResync(ctx context.Context) {
-	socketFiles := listSockets(GhostRecordGlobalStore.list())
+	socketFiles := listSockets(d.ghostRecordStore.list())
 
 	log.Log.Infof("resyncing virt-launcher domains")
 	for _, socket := range socketFiles {
@@ -165,9 +167,11 @@ func (d *domainWatcher) handleResync(ctx context.Context) {
 			// end listening.
 			continue
 		}
-		defer client.Close()
 
 		domain, exists, err := client.GetDomain()
+		// Close right away rather than deferring: a deferred Close would keep
+		// every launcher connection of this resync open until the loop ends.
+		client.Close()
 		if err != nil {
 			// this resync is best effort only.
 			log.Log.Reason(err).Errorf("unable to retrieve domain at socket %s during resync", socket)
@@ -186,7 +190,7 @@ func (d *domainWatcher) handleResync(ctx context.Context) {
 func (d *domainWatcher) handleStaleSocketConnections(ctx context.Context, watchdogTimeoutSeconds int) error {
 	var unresponsive []string
 
-	socketFiles := listSockets(GhostRecordGlobalStore.list())
+	socketFiles := listSockets(d.ghostRecordStore.list())
 
 	for _, socket := range socketFiles {
 		sock, err := net.DialTimeout("unix", socket, time.Duration(socketDialTimeoutSeconds)*time.Second)
@@ -218,7 +222,7 @@ func (d *domainWatcher) handleStaleSocketConnections(ctx context.Context, watchd
 
 		if diff > int64(watchdogTimeoutSeconds) {
 
-			record, exists := GhostRecordGlobalStore.findBySocket(key)
+			record, exists := d.ghostRecordStore.findBySocket(key)
 
 			if !exists {
 				// ignore if info file doesn't exist

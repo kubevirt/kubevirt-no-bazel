@@ -85,11 +85,21 @@ const (
 	// lookup key in AdditionalProperties
 	AdditionalPropertiesMigrationNetwork = "MigrationNetwork"
 
+	// lookup key in AdditionalProperties: presence means migration network fallback is allowed
+	AdditionalPropertiesAllowMigrationNetworkFallback = "AllowMigrationNetworkFallback"
+
 	// lookup key in AdditionalProperties
 	AdditionalPropertiesCrossClusterMigrationNetwork = "CrossClusterMigrationNetwork"
 
 	// lookup key in AdditionalProperties — presence means Proxy datapath is selected
 	AdditionalPropertiesDecentralizedLiveMigrationProxy = "DecentralizedLiveMigrationProxy"
+
+	// DecentralizedLiveMigrationProxyEnvName is set on synchronization-controller pods
+	// when the Proxy datapath template is selected (including virt-handler migration
+	// cert mounts). The binary keys Proxy cert loading and proxy init off this env
+	// so old Direct-template pods stay in Direct mode during rollout even if live
+	// ClusterConfig already reports Proxy enabled.
+	DecentralizedLiveMigrationProxyEnvName = "DECENTRALIZED_LIVE_MIGRATION_PROXY"
 
 	// lookup key in AdditionalProperties
 	AdditionalPropertiesPersistentReservationEnabled = "PersistentReservationEnabled"
@@ -187,6 +197,15 @@ func GetTargetConfigFromKVWithEnvVarManager(kv *v1.KubeVirt, envVarManager EnvVa
 	if kv.Spec.Configuration.MigrationConfiguration != nil &&
 		kv.Spec.Configuration.MigrationConfiguration.Network != nil {
 		additionalProperties[AdditionalPropertiesMigrationNetwork] = *kv.Spec.Configuration.MigrationConfiguration.Network
+	}
+
+	// virt-handler and the synchronization controllers read allowMigrationNetworkFallback once at
+	// startup. Record it in AdditionalProperties so that flipping it changes the install-strategy
+	// ID and rolls those pods, the same way a migration network change does.
+	if kv.Spec.Configuration.MigrationConfiguration != nil &&
+		kv.Spec.Configuration.MigrationConfiguration.AllowMigrationNetworkFallback != nil &&
+		*kv.Spec.Configuration.MigrationConfiguration.AllowMigrationNetworkFallback {
+		additionalProperties[AdditionalPropertiesAllowMigrationNetworkFallback] = ""
 	}
 
 	// TODO: consider passing in clusterconfig and use it's existing persistent reservation enabled state
@@ -519,6 +538,19 @@ func (c *KubeVirtDeploymentConfig) GetImagePrefix() string {
 	return c.ImagePrefix
 }
 
+// GetHandlerImage returns the configured override, or falls back to the
+// registry/prefix/version convention (see AddVersionSeparatorPrefix).
+func (c *KubeVirtDeploymentConfig) GetHandlerImage() string {
+	if c.VirtHandlerImage != "" {
+		return c.VirtHandlerImage
+	}
+	version := c.GetHandlerVersion()
+	if !strings.HasPrefix(version, "{{if") {
+		version = ":" + version
+	}
+	return fmt.Sprintf("%s/%svirt-handler%s", c.GetImageRegistry(), c.GetImagePrefix(), version)
+}
+
 func (c *KubeVirtDeploymentConfig) GetExtraEnv() map[string]string {
 	return c.PassthroughEnvVars
 }
@@ -590,6 +622,11 @@ func (c *KubeVirtDeploymentConfig) PersistentReservationEnabled() bool {
 	return enabled
 }
 
+func (c *KubeVirtDeploymentConfig) DecentralizedLiveMigrationProxyEnabled() bool {
+	_, enabled := c.AdditionalProperties[AdditionalPropertiesDecentralizedLiveMigrationProxy]
+	return enabled
+}
+
 func (c *KubeVirtDeploymentConfig) VirtTemplateDeploymentEnabled() bool {
 	_, enabled := c.AdditionalProperties[AdditionalPropertiesVirtTemplateDeploymentEnabled]
 	return enabled
@@ -614,9 +651,8 @@ func (c *KubeVirtDeploymentConfig) GetMigrationNetwork() *string {
 	value, enabled := c.AdditionalProperties[AdditionalPropertiesMigrationNetwork]
 	if enabled {
 		return &value
-	} else {
-		return nil
 	}
+	return nil
 }
 
 func (c *KubeVirtDeploymentConfig) GetCrossClusterMigrationNetwork() *string {
@@ -693,6 +729,31 @@ func (c *KubeVirtDeploymentConfig) GetProductVersion() string {
 		return c.GetKubeVirtVersion()
 	}
 	return productVersion
+}
+
+func (c *KubeVirtDeploymentConfig) GetProductLabels() (productName, productVersion, productComponent string) {
+	productName = c.GetProductName()
+	productVersion = c.AdditionalProperties[ProductVersionKey]
+	productComponent = c.GetProductComponent()
+
+	invalidLabelPatternErrorMessage := "invalid %s: labels must be 63 characters or less, begin and end with alphanumeric characters, and contain only dot, hyphen or dash"
+
+	if !IsValidLabel(productName) {
+		log.Log.Errorf(invalidLabelPatternErrorMessage, "kubevirt.spec.productName")
+		productName = ""
+	}
+	if !IsValidLabel(productVersion) {
+		log.Log.Errorf(invalidLabelPatternErrorMessage, "kubevirt.spec.productVersion")
+		productVersion = ""
+	}
+	if !IsValidLabel(productComponent) {
+		log.Log.Errorf(invalidLabelPatternErrorMessage, "kubevirt.spec.productComponent")
+		productComponent = ""
+	}
+	if productComponent == "" {
+		productComponent = v1.AppComponent
+	}
+	return productName, productVersion, productComponent
 }
 
 func (c *KubeVirtDeploymentConfig) generateInstallStrategyID() {

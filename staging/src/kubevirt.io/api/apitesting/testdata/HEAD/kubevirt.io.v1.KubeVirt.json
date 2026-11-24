@@ -136,6 +136,7 @@
         "allowWorkloadDisruption": true,
         "disableTLS": true,
         "network": "networkValue",
+        "allowMigrationNetworkFallback": true,
         "matchSELinuxLevelOnMigration": true,
         "crossClusterNetwork": "crossClusterNetworkValue",
         "decentralizedLiveMigrationDatapath": "decentralizedLiveMigrationDatapathValue"
@@ -324,6 +325,9 @@
         "minTLSVersion": "minTLSVersionValue",
         "ciphers": [
           "ciphersValue"
+        ],
+        "groups": [
+          "groupsValue"
         ]
       },
       "seccompConfiguration": {
@@ -381,6 +385,9 @@
       "virtTemplateDeployment": {
         "enabled": true
       },
+      "multiIOThreadAutoPolicy": {
+        "enabled": true
+      },
       "instancetype": {
         "referencePolicy": "referencePolicyValue"
       },
@@ -430,7 +437,8 @@
           }
         }
       },
-      "roleAggregationStrategy": "roleAggregationStrategyValue"
+      "roleAggregationStrategy": "roleAggregationStrategyValue",
+      "emulationPolicy": "emulationPolicyValue"
     },
     "infra": {
       "nodePlacement": {

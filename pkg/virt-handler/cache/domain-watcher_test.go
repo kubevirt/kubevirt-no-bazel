@@ -24,14 +24,20 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
+	cmdserver "kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cmd-server"
 )
 
 var _ = Describe("Domain Watcher", func() {
@@ -116,6 +122,7 @@ var _ = Describe("Domain Watcher", func() {
 				1*time.Hour,
 				nil,
 				new(int),
+				nil,
 			)
 
 			Eventually(d.result).Should(BeClosed())
@@ -159,6 +166,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			// Call handleStaleSocketConnections - the socket is now responsive
@@ -188,6 +196,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			watchdogTimeout := 10
@@ -219,6 +228,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			err = d.handleStaleSocketConnections(ctx, watchdogTimeout)
@@ -244,6 +254,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			err = d.handleStaleSocketConnections(ctx, 10)
@@ -288,6 +299,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			err = d.handleStaleSocketConnections(ctx, 10)
@@ -322,6 +334,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			err = d.handleStaleSocketConnections(ctx, watchdogTimeout)
@@ -354,6 +367,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			// Should not panic or error when ghost record doesn't exist
@@ -399,6 +413,7 @@ var _ = Describe("Domain Watcher", func() {
 				consecutiveFails:    new(int),
 				result:              make(chan watch.Event, 100),
 				cancel:              cancel,
+				ghostRecordStore:    ghostRecordStore,
 			}
 
 			// Call handleStaleSocketConnections - all sockets are now responsive
@@ -416,4 +431,99 @@ var _ = Describe("Domain Watcher", func() {
 		})
 	})
 
+	Context("handleResync", func() {
+		It("should close each launcher connection before moving on", func() {
+			ghostRecordStore := InitializeGhostRecordCache(
+				NewIterableCheckpointManager(GinkgoT().TempDir(), GinkgoT().TempDir()),
+			)
+			ctrl := gomock.NewController(GinkgoT())
+
+			var launchers []*connCountingListener
+			for i := range 2 {
+				name := fmt.Sprintf("domain-%d", i)
+				domainManager := virtwrap.NewMockDomainManager(ctrl)
+				domainManager.EXPECT().ListAllDomains().Return([]*api.Domain{api.NewMinimalDomain(name)}, nil)
+				domainManager.EXPECT().GetGuestOSInfo().Return(nil)
+				domainManager.EXPECT().InterfacesStatus().Return(nil)
+
+				socketPath := filepath.Join(GinkgoT().TempDir(), "launcher.sock")
+				launchers = append(launchers, runConnCountingCmdServer(socketPath, domainManager))
+				Expect(ghostRecordStore.Add("test-ns", name, socketPath, types.UID(fmt.Sprintf("uid-%d", i)))).To(Succeed())
+			}
+			accepted := func() (n int32) {
+				for _, l := range launchers {
+					n += l.accepted.Load()
+				}
+				return n
+			}
+			open := func() (n int32) {
+				for _, l := range launchers {
+					n += l.open.Load()
+				}
+				return n
+			}
+
+			// Nobody reads the unbuffered result channel until we do, so
+			// handleResync waits on every send like it does when the
+			// informer is slow.
+			d := &domainWatcher{result: make(chan watch.Event), ghostRecordStore: ghostRecordStore}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				defer GinkgoRecover()
+				defer close(done)
+				d.handleResync(ctx)
+			}()
+
+			for i := range 2 {
+				Eventually(accepted).Should(BeEquivalentTo(i + 1))
+				Eventually(open).Should(BeZero(), "launcher connections still open while sending event %d", i+1)
+				Eventually(d.result).Should(Receive())
+			}
+			Eventually(done).Should(BeClosed())
+		})
+	})
+
 })
+
+// connCountingListener counts the connections it accepted and how many of
+// them are still open.
+type connCountingListener struct {
+	net.Listener
+	accepted atomic.Int32
+	open     atomic.Int32
+}
+
+func (l *connCountingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.accepted.Add(1)
+	l.open.Add(1)
+	return &countedConn{Conn: conn, open: &l.open}, nil
+}
+
+type countedConn struct {
+	net.Conn
+	open      *atomic.Int32
+	closeOnce sync.Once
+}
+
+func (c *countedConn) Close() error {
+	c.closeOnce.Do(func() { c.open.Add(-1) })
+	return c.Conn.Close()
+}
+
+func runConnCountingCmdServer(socketPath string, domainManager virtwrap.DomainManager) *connCountingListener {
+	listener, err := net.Listen("unix", socketPath)
+	Expect(err).ToNot(HaveOccurred())
+	counting := &connCountingListener{Listener: listener}
+
+	server := grpc.NewServer()
+	cmdserver.RegisterCmdServer(cmdserver.NewLauncher(domainManager, nil))(server)
+	go func() { _ = server.Serve(counting) }()
+	DeferCleanup(server.Stop)
+	return counting
+}

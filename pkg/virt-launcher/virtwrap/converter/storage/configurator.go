@@ -40,19 +40,21 @@ type OptimalBlockIODetectFunc func(disk *api.Disk) (*api.BlockIO, error)
 type diskOption func(*DiskConfigurator)
 
 type DiskConfigurator struct {
-	architecture         string
-	virtioModel          string
-	useLaunchSecuritySEV bool
-	useLaunchSecurityPV  bool
-	volumesDiscardIgnore []string
-	hotplugVolumes       map[string]v1.VolumeStatus
-	permanentVolumes     map[string]v1.VolumeStatus
-	isBlockPVC           map[string]bool
-	isBlockDV            map[string]bool
-	applyCBT             map[string]string
-	disksInfo            map[string]*disk.DiskInfo
-	ephemeralDiskCreator ephemeraldisk.EphemeralDiskCreatorInterface
-	detectOptimalBlockIO OptimalBlockIODetectFunc
+	architecture                   string
+	virtioModel                    string
+	useLaunchSecuritySEV           bool
+	useLaunchSecurityPV            bool
+	volumesDiscardIgnore           []string
+	hotplugVolumes                 map[string]v1.VolumeStatus
+	permanentVolumes               map[string]v1.VolumeStatus
+	isBlockPVC                     map[string]bool
+	isBlockDV                      map[string]bool
+	applyCBT                       map[string]string
+	disksInfo                      map[string]*disk.DiskInfo
+	ephemeralDiskCreator           ephemeraldisk.EphemeralDiskCreatorInterface
+	detectOptimalBlockIO           OptimalBlockIODetectFunc
+	scsiMultiIOThreadEnabled       bool
+	multiIOThreadAutoPolicyEnabled bool
 }
 
 func NewDiskConfigurator(options ...diskOption) DiskConfigurator {
@@ -100,7 +102,27 @@ func (d DiskConfigurator) Configure(vmi *v1.VirtualMachineInstance, domain *api.
 	prefixMap := newDeviceNamer(vmi.Status.VolumeStatus, vmi.Spec.Domain.Devices.Disks)
 	currentAutoThread := uint(1)
 	currentDedicatedThread := uint(autoThreads + 1)
-	supplementalIOThreads := iothreads.BuildSupplementalPoolIOThreads(vmi)
+
+	var ioThreadPool *api.DiskIOThreads
+	useSupplementalPool := false
+	// SCSIMultiIOThread feature gate and MultiIOThreadAutoPolicy kubevirt config
+	// must be both enabled to take advantage of allocating entire auto thread pool to each disk
+	useMultiIOAuto := d.scsiMultiIOThreadEnabled && d.multiIOThreadAutoPolicyEnabled
+	if vmi.Spec.Domain.IOThreadsPolicy != nil {
+		if *vmi.Spec.Domain.IOThreadsPolicy == v1.IOThreadsPolicySupplementalPool {
+			// vmi admitter requires SupplementalPoolThreadCount to be set when using this thread policy
+			ioThreadPool = iothreads.BuildIOThreadPool(int(*vmi.Spec.Domain.IOThreads.SupplementalPoolThreadCount))
+			useSupplementalPool = true
+		} else if *vmi.Spec.Domain.IOThreadsPolicy == v1.IOThreadsPolicyAuto && useMultiIOAuto {
+			// we don't want to allocate an auto thread pool larger than what a VM can utilize
+			// additionally, perf analysis have shown that a larger thread pool does not always yield better results
+			// so we will bound the thread pool size by a static maximum
+			autoPoolSize := iothreads.AutoPoolSize(autoThreads, vcpus)
+			ioThreadPool = iothreads.BuildIOThreadPool(autoPoolSize)
+			// dedicated threads are reserved after the (possibly capped) auto pool
+			currentDedicatedThread = uint(autoPoolSize + 1)
+		}
+	}
 	for _, disk := range vmi.Spec.Domain.Devices.Disks {
 		newDisk := api.Disk{}
 		emptyCDRom := false
@@ -131,6 +153,12 @@ func (d DiskConfigurator) Configure(vmi *v1.VirtualMachineInstance, domain *api.
 			return err
 		}
 
+		// Volume conversion may replace the driver. Apply the explicit opt-out
+		// afterwards so every virtio-blk disk gets a single request queue.
+		if multiQueue := vmi.Spec.Domain.Devices.BlockMultiQueue; multiQueue != nil && !*multiQueue && newDisk.Target.Bus == v1.DiskBusVirtio {
+			newDisk.Driver.Queues = new(uint(1))
+		}
+
 		if err := convert_v1_BlockSize_To_api_BlockIO(&disk, &newDisk, d.architecture, d.detectOptimalBlockIO); err != nil {
 			return err
 		}
@@ -147,7 +175,7 @@ func (d DiskConfigurator) Configure(vmi *v1.VirtualMachineInstance, domain *api.
 			return err
 		}
 		if hasIOThreads {
-			currentDedicatedThread, currentAutoThread = assignDiskIOThread(&disk, &newDisk, supplementalIOThreads, autoThreads, currentDedicatedThread, currentAutoThread)
+			currentDedicatedThread, currentAutoThread = assignDiskIOThread(&disk, &newDisk, ioThreadPool, autoThreads, currentDedicatedThread, currentAutoThread, useSupplementalPool)
 		}
 	}
 
@@ -259,7 +287,7 @@ func (d DiskConfigurator) convert_v1_Volume_To_api_Disk(source *v1.Volume, disk 
 	}
 
 	if source.HostDisk != nil {
-		return convert_v1_HostDisk_To_api_Disk(source.Name, source.HostDisk.Path, d.applyCBT[source.Name], disk)
+		return convert_v1_HostDisk_To_api_Disk(source.Name, source.HostDisk.Path, disk)
 	}
 
 	if source.PersistentVolumeClaim != nil {
@@ -296,12 +324,6 @@ func (d DiskConfigurator) convert_v1_Volume_To_api_Disk(source *v1.Volume, disk 
 }
 
 func (d DiskConfigurator) convert_v1_Hotplug_Volume_To_api_Disk(source *v1.Volume, disk *api.Disk) error {
-	// This is here because virt-handler before passing the VMI here replaces all PVCs with host disks in
-	// hostdisk.ReplacePVCByHostDisk not quite sure why, but it broken hot plugging PVCs
-	if source.HostDisk != nil {
-		return convertHotplugVolumeSourceToDisk(source.Name, d.applyCBT[source.Name], d.isBlockPVC[source.Name], disk, d.volumesDiscardIgnore)
-	}
-
 	if source.PersistentVolumeClaim != nil {
 		return convertHotplugVolumeSourceToDisk(source.Name, d.applyCBT[source.Name], d.isBlockPVC[source.Name], disk, d.volumesDiscardIgnore)
 	}
@@ -387,5 +409,17 @@ func DiskWithEphemeralDiskCreator(ephemeralDiskCreator ephemeraldisk.EphemeralDi
 func DiskWithOptimalBlockIODetector(f OptimalBlockIODetectFunc) diskOption {
 	return func(d *DiskConfigurator) {
 		d.detectOptimalBlockIO = f
+	}
+}
+
+func DiskWithScsiMultiIOThreadEnabled(enabled bool) diskOption {
+	return func(d *DiskConfigurator) {
+		d.scsiMultiIOThreadEnabled = enabled
+	}
+}
+
+func DiskWithMultiIOThreadAutoPolicyEnabled(enabled bool) diskOption {
+	return func(d *DiskConfigurator) {
+		d.multiIOThreadAutoPolicyEnabled = enabled
 	}
 }

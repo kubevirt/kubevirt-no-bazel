@@ -142,6 +142,7 @@ spec:
       useEmulation: true
     emulatedMachines:
     - emulatedMachinesValue
+    emulationPolicy: emulationPolicyValue
     evictionStrategy: evictionStrategyValue
     handlerConfiguration:
       restClient:
@@ -184,6 +185,7 @@ spec:
     memBalloonStatsPeriod: 4294967275
     migrations:
       allowAutoConverge: true
+      allowMigrationNetworkFallback: true
       allowPostCopy: true
       allowWorkloadDisruption: true
       bandwidthPerMigration: "0"
@@ -201,6 +203,8 @@ spec:
       unsafeMigrationOverride: true
       utilityVolumesTimeout: -21
     minCPUModel: minCPUModelValue
+    multiIOThreadAutoPolicy:
+      enabled: true
     network:
       binding:
         bindingKey:
@@ -263,6 +267,8 @@ spec:
     tlsConfiguration:
       ciphers:
       - ciphersValue
+      groups:
+      - groupsValue
       minTLSVersion: minTLSVersionValue
     virtTemplateDeployment:
       enabled: true

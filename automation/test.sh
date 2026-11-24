@@ -18,6 +18,7 @@
 #
 
 set -ex
+shopt -s extglob
 
 export TIMESTAMP=${TIMESTAMP:-1}
 
@@ -28,6 +29,7 @@ readonly ARTIFACTS_PATH="${ARTIFACTS-$WORKSPACE/exported-artifacts}"
 readonly TEMPLATES_SERVER="gs://kubevirt-vm-images"
 readonly BAZEL_CACHE="${BAZEL_CACHE:-http://bazel-cache.kubevirt-prow.svc.cluster.local:8080/kubevirt.io/kubevirt}"
 readonly SRIOV_TEST_LANE="$(<./kubevirtci/stable_provider.txt)"
+readonly VGPU_TEST_LANE="$(<./kubevirtci/stable_provider.txt)"
 
 readonly NETWORK_SMOKE_LABELS="conformance"
 
@@ -43,12 +45,12 @@ if [[ ${CI} == "true" && -n "$PULL_BASE_SHA" && -n "$PULL_PULL_SHA" && "$JOB_NAM
         echo "Aborting as there were only none-code related changes detected."
         exit 0
     fi
-    RPM_CHANGES=$(echo "$CI_GIT_ALL_CHANGES" | grep -E '^(rpm/|WORKSPACE)' || :)
+    RPM_CHANGES=$(echo "$CI_GIT_ALL_CHANGES" | grep -E '^(rpm/|rpms\.json|MODULE\.bazel)' || :)
     # hack/cluster-build.sh rebuilds the RPM base images when their inputs
     # change. A change to BASE_IMAGE_VERSIONS alone tests the pinned images.
-    BASE_IMAGE_CHANGES=$(echo "$CI_GIT_ALL_CHANGES" | grep -E '^(rpm/|hack/rpmtree-utils\.sh|hack/rpm-base-images/(Containerfile\.|[a-z-]+\.sh))' || :)
+    BASE_IMAGE_CHANGES=$(echo "$CI_GIT_ALL_CHANGES" | grep -E '^(rpm/|rpms\.json|hack/rpmtree-utils\.sh|hack/rpm-base-images/(Containerfile\.|[a-z-]+\.sh))' || :)
     export BASE_IMAGE_CHANGES
- fi
+fi
 
 if [ -z $TARGET ]; then
   echo "FATAL: TARGET must be non empty"
@@ -93,6 +95,11 @@ case "$TARGET" in
     export KUBEVIRT_DEPLOY_CDI=false
     export KUBEVIRT_DEPLOY_ISTIO=true
     export KUBEVIRT_DEPLOY_NETWORK_RESOURCES_INJECTOR=true
+    if [[ ${KUBEVIRT_SINGLE_STACK} != "true" ]]; then
+      export KUBEVIRT_NUM_SECONDARY_NICS=1
+      export KUBEVIRT_SECONDARY_IFACES_TO_IP=eth1
+      export KUBEVIRT_DEPLOY_NET_DRA_DRIVER=true
+    fi
     export KUBEVIRT_PROVIDER=${TARGET/-sig-network*/}
     if [[ "${KUBEVIRT_PROVIDER}" == "${SRIOV_TEST_LANE}" && $JOB_NAME =~ ^(pull|periodic)-kubevirt-e2e-${SRIOV_TEST_LANE}-sig-network$ ]]; then
       export KUBEVIRT_WITH_SRIOV=true
@@ -147,12 +154,22 @@ case "$TARGET" in
   *sig-compute-serial*)
     export KUBEVIRT_PROVIDER=${TARGET/-sig-compute-serial/}
     add_feature_gate "Plugins"
+    if [[ "${KUBEVIRT_PROVIDER}" == "${VGPU_TEST_LANE}" ]]; then
+      export KUBEVIRT_WITH_VGPU_MDEV=true
+      export KUBEVIRT_FUNC_TEST_SUITE_ARGS="${KUBEVIRT_FUNC_TEST_SUITE_ARGS} -emulated-vgpu-mdev=true"
+    fi
     ;;
   *sig-compute-parallel*)
     export KUBEVIRT_PROVIDER=${TARGET/-sig-compute-parallel/}
     ;;
   *sig-compute-conformance*)
     export KUBEVIRT_PROVIDER=${TARGET/-sig-compute-conformance/}
+    ;;
+  # DRA-CEX: CEX AP-queue passthrough via Kubernetes DRA. Needs an s390x
+  # node with the CEX DRA driver and a crypto queue, so it is not part of
+  # wg-s390x or the generic sig-compute lanes.
+  *sig-compute-dra-cex*)
+    export KUBEVIRT_PROVIDER=${TARGET/-sig-compute-dra-cex/}
     ;;
   *sig-compute-dra-gpu*)
     export KUBEVIRT_PROVIDER=${TARGET/-sig-compute-dra-gpu/}
@@ -161,6 +178,13 @@ case "$TARGET" in
     export FAKE_PCI_DEVICES=8
     export DRA_DRIVER_NAME="vfio-gpu.example.com"
     add_feature_gate "GPUsWithDRA"
+    ;;
+  *sig-compute-dra-cpu*)
+    export KUBEVIRT_PROVIDER=${TARGET/-sig-compute-dra-cpu/}
+    export KUBEVIRT_USE_DRA_CPU=true
+    export KUBEVIRT_NUM_NUMA_NODES=2
+    export KUBEVIRT_NUM_VCPU=12
+    add_feature_gate "CPUsWithDRA"
     ;;
   *sig-compute*)
     export KUBEVIRT_PROVIDER=${TARGET/-sig-compute/}
@@ -196,6 +220,94 @@ case "$TARGET" in
 esac
 
 detect_centos_stream_version
+
+# CS10 ARM64 images support the firmware and variable store used by Secure Boot.
+if [[ $TARGET =~ wg-arm64 && ${KUBEVIRT_CENTOS_STREAM_VERSION} == "10" ]]; then
+  export KUBEVIRT_ARM64_SECURE_BOOT="${KUBEVIRT_ARM64_SECURE_BOOT:-true}"
+fi
+
+set_lane_push_targets() {
+  local -r BASE_PUSH_TARGETS="virt-api virt-controller virt-handler virt-launcher virt-operator virt-synchronization-controller vm-killer"
+  local -r JOB_PREFIX_PATTERN="@(pull|periodic)-kubevirt-e2e-k8s-[0-9].[0-9][0-9]-"
+
+  if [[ $TARGET =~ .*kind.* ]] || [[ $TARGET =~ .*arm64.* ]] || [[ $BUILD_ARCH == "crossbuild-s390x" ]]; then
+    echo "Skipping lane-specific PUSH_TARGETS on kind/arm64/s390x lanes ${TARGET}"
+    return
+  fi
+
+  if [[ $JOB_NAME != ${JOB_PREFIX_PATTERN}* ]]; then
+    return
+  fi
+
+  case "${JOB_NAME#${JOB_PREFIX_PATTERN}}" in
+    windows*)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} disks-images-provider virt-exportproxy winrmcli"
+      ;;
+    sig-network-smoke)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-with-test-tooling-container-disk fedora-with-test-tooling-container-disk virt-exportproxy"
+      ;;
+    ipv6-sig-network)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-with-test-tooling-container-disk fedora-with-test-tooling-container-disk network-passt-binding network-passt-binding-cni virt-exportproxy"
+      ;;
+    sig-network)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-with-test-tooling-container-disk cirros-container-disk-demo fedora-with-test-tooling-container-disk network-passt-binding network-passt-binding-cni test-network-vhostuser-dra-binding test-helpers virt-exportproxy"
+      ;;
+    sig-compute-migrations)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-ext-kernel-boot-demo alpine-with-test-tooling-container-disk disks-images-provider fedora-with-test-tooling-container-disk virt-exportproxy"
+      ;;
+    sig-compute-serial)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-with-test-tooling-container-disk disks-images-provider example-hook-sidecar example-node-hook-plugin fedora-with-test-tooling-container-disk test-launcher-hook-sidecar virt-exportproxy"
+      ;;
+    sig-compute-realtime)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} disks-images-provider fedora-realtime-container-disk virt-exportproxy"
+      ;;
+    sig-compute)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-ext-kernel-boot-demo alpine-with-test-tooling-container-disk cirros-container-disk-demo cirros-custom-container-disk-demo disks-images-provider example-cloudinit-hook-sidecar example-hook-sidecar fedora-with-test-tooling-container-disk sidecar-shim virt-exportproxy virtio-container-disk"
+      # Periodic jobs execute both serial and parallel tests, they need additional targets
+      if [[ $JOB_NAME == periodic-* ]]; then
+        export PUSH_TARGETS="${PUSH_TARGETS} example-node-hook-plugin test-launcher-hook-sidecar"
+      fi
+      ;;
+    sig-monitoring)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo disks-images-provider fedora-with-test-tooling-container-disk virt-exportproxy"
+      ;;
+    sig-operator)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo disks-images-provider virt-exportproxy"
+      export PUSH_TARGETS_ALT="virt-api virt-controller virt-handler virt-launcher virt-operator virt-synchronization-controller virt-exportproxy"
+      ;;
+    sig-storage)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-with-test-tooling-container-disk disks-images-provider example-disk-mutation-hook-sidecar fedora-with-test-tooling-container-disk libguestfs-tools pr-helper test-helpers virt-exportproxy virt-exportserver virtio-container-disk"
+      ;;
+    vsock-local)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} disks-images-provider fedora-with-test-tooling-container-disk virt-exportproxy"
+      ;;
+    sig-compute-dra-cpu)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo disks-images-provider virt-exportproxy"
+      ;;
+    sig-compute-conformance)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-ext-kernel-boot-demo alpine-with-test-tooling-container-disk disks-images-provider fedora-with-test-tooling-container-disk virt-exportproxy"
+      ;;
+    sig-compute-dra-gpu)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo disks-images-provider virt-exportproxy"
+      ;;
+    sig-network-with-dnc)
+      export PUSH_TARGETS="${BASE_PUSH_TARGETS} alpine-container-disk-demo alpine-with-test-tooling-container-disk cirros-container-disk-demo fedora-with-test-tooling-container-disk network-passt-binding network-passt-binding-cni test-helpers test-network-vhostuser-dra-binding virt-exportproxy"
+      ;;
+  esac
+
+  if [[ -n "${PUSH_TARGETS:-}" ]]; then
+    [[ -v PUSH_TARGETS_ALT ]] || export PUSH_TARGETS_ALT=""
+    echo "Using lane-specific PUSH_TARGETS for ${JOB_NAME}: ${PUSH_TARGETS}"
+  fi
+}
+
+set_lane_push_targets
+
+# devel_alt is only needed on sig-operator lanes according to observed pulls.
+if [[ ! $TARGET =~ .*sig-operator.* ]]; then
+  export DOCKER_TAG_ALT=""
+  echo "Disabling DOCKER_TAG_ALT for non-sig-operator lane ${TARGET}"
+fi
 
 # Single-node single-replica test lanes need nfs csi to run sig-storage tests
 if [[ $KUBEVIRT_NUM_NODES = "1" && $KUBEVIRT_INFRA_REPLICAS = "1" ]]; then
@@ -413,9 +525,9 @@ echo "=================="
 # Build and test images with a custom image name prefix
 export IMAGE_PREFIX_ALT=${IMAGE_PREFIX_ALT:-kv-}
 
-# The container build (default) builds and pushes images in cluster-sync,
-# so only Bazel lanes need the pre-build step.
-if [ "${KUBEVIRT_USE_BAZEL}" = "true" ]; then
+# The container build (default) builds and pushes images in cluster-sync, so
+# only Bazel lanes pre-build them, unless the lane sets PUSH_TARGETS.
+if [ "${KUBEVIRT_USE_BAZEL}" = "true" ] && [[ -z "${PUSH_TARGETS:-}" ]]; then
     build_images
 fi
 
@@ -596,16 +708,24 @@ if [[ -z ${KUBEVIRT_E2E_FOCUS} && -z ${KUBEVIRT_E2E_SKIP} && -z ${label_filter} 
     label_filter='(sig-compute-migrations && !(GPU,VGPU)) && !(SEV, SEVES, secure-execution)'
   elif [[ $TARGET =~ sig-compute-serial ]]; then
     export KUBEVIRT_E2E_PARALLEL=false
-    label_filter='((sig-compute && Serial) && !(GPU,VGPU,DRA-GPU,sig-compute-migrations) && !(SEV, SEVES, secure-execution))'
+    label_filter='((sig-compute && Serial) && !(GPU,DRA-GPU,DRA-CPU,DRA-CEX,sig-compute-migrations) && !(SEV, SEVES, secure-execution))'
+    if [[ "${KUBEVIRT_WITH_VGPU_MDEV}" != "true" ]]; then
+      add_to_label_filter '(!VGPU)' '&&'
+    fi
   elif [[ $TARGET =~ sig-compute-parallel ]]; then
     label_filter='(sig-compute && !(Serial,GPU,VGPU,sig-compute-migrations,sig-storage,storage-req) && !(SEV, SEVES, secure-execution))'
   elif [[ $TARGET =~ sig-compute-conformance ]]; then
     label_filter='(sig-compute && conformance)'
+  elif [[ $TARGET =~ sig-compute-dra-cex ]]; then
+    export KUBEVIRT_E2E_PARALLEL=false
+    label_filter='(DRA-CEX)'
   elif [[ $TARGET =~ sig-compute-dra-gpu ]]; then
     export KUBEVIRT_E2E_PARALLEL=false
     label_filter='(DRA-GPU)'
+  elif [[ $TARGET =~ sig-compute-dra-cpu ]]; then
+    label_filter='(DRA-CPU)'
   elif [[ $TARGET =~ sig-compute ]]; then
-    label_filter='(sig-compute && !(GPU,VGPU,sig-compute-migrations,sig-storage,DRA-GPU) && !(SEV, SEVES, secure-execution))'
+    label_filter='(sig-compute && !(GPU,VGPU,sig-compute-migrations,sig-storage,DRA-GPU,DRA-CPU,DRA-CEX) && !(SEV, SEVES, secure-execution))'
   elif [[ $TARGET =~ sig-monitoring ]]; then
     label_filter='(sig-monitoring)'
   elif [[ $TARGET =~ sig-operator ]]; then
@@ -619,7 +739,7 @@ if [[ -z ${KUBEVIRT_E2E_FOCUS} && -z ${KUBEVIRT_E2E_SKIP} && -z ${label_filter} 
   elif [[ $TARGET =~ gpu.* ]]; then
     label_filter='(GPU)'
   else
-    label_filter='(!(Multus,SRIOV,Macvtap,GPU,VGPU,netCustomBindingPlugins))'
+    label_filter='(!(Multus,SRIOV,Macvtap,GPU,VGPU,netCustomBindingPlugins,DRA-CEX))'
   fi
 
   # execute tests labelled as PERIODIC only on periodic test lanes (according to lane name)
@@ -632,7 +752,8 @@ if [[ -z ${KUBEVIRT_E2E_FOCUS} && -z ${KUBEVIRT_E2E_SKIP} && -z ${label_filter} 
     add_to_label_filter "(!Sysprep)" "&&"
   fi
 
-  if [[ ! $TARGET =~ wg-s390x ]] && [[ ! $TARGET =~ secure-execution ]]; then
+  # sig-compute-dra-cex runs on s390x, so keep requires-s390x tests.
+  if [[ ! $TARGET =~ wg-s390x ]] && [[ ! $TARGET =~ secure-execution ]] && [[ ! $TARGET =~ dra-cex ]]; then
     add_to_label_filter "(!requires-s390x)" "&&"
   fi
 
@@ -642,6 +763,10 @@ if [[ -z ${KUBEVIRT_E2E_FOCUS} && -z ${KUBEVIRT_E2E_SKIP} && -z ${label_filter} 
 
   if [[ ${KUBEVIRT_CROSS_ARCH_EMULATION} != "true" ]]; then
     add_to_label_filter "(!requires-cross-arch-emulation)" "&&"
+  fi
+
+  if [[ ${KUBEVIRT_ARM64_SECURE_BOOT} != "true" ]]; then
+    add_to_label_filter "(!requires-arm64-secure-boot)" "&&"
   fi
 
   if [[ $KUBEVIRT_PROVIDER =~ k8s-1\.3[1-4] ]]; then
@@ -665,9 +790,11 @@ else
   add_to_label_filter '!(single-replica)' '&&'
 fi
 
-# Single stack IPv6 cluster should skip tests that require dual stack cluster
+# Single stack IPv6 cluster should skip tests that require dual stack cluster,
+# and the network DRA driver tests, as the driver does not support IPv6
 if [[ ${KUBEVIRT_SINGLE_STACK} == "true" ]]; then
   add_to_label_filter '(!requires-dual-stack-cluster)' '&&'
+  add_to_label_filter '(!DRA-Network)' '&&'
 fi
 
 # If KUBEVIRT_QUARANTINE is not set, do not run quarantined tests. When it is

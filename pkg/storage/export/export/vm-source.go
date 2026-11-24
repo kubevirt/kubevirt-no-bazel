@@ -20,6 +20,7 @@
 package export
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	virtv1 "kubevirt.io/api/core/v1"
 	exportv1 "kubevirt.io/api/export/v1"
 	"kubevirt.io/client-go/log"
+	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 
 	"kubevirt.io/kubevirt/pkg/controller"
 	"kubevirt.io/kubevirt/pkg/pointer"
@@ -39,12 +41,14 @@ import (
 )
 
 type VMSource struct {
-	sourceVolumes *sourceVolumes
+	sourceVolumes        *sourceVolumes
+	vmManifestInputsFunc func() (*virtv1.VirtualMachine, []*cdiv1.DataVolume, error)
 }
 
-func NewVMSource(sourceVolumes *sourceVolumes) *VMSource {
+func NewVMSource(sourceVolumes *sourceVolumes, vmManifestInputsFunc func() (*virtv1.VirtualMachine, []*cdiv1.DataVolume, error)) *VMSource {
 	return &VMSource{
-		sourceVolumes: sourceVolumes,
+		sourceVolumes:        sourceVolumes,
+		vmManifestInputsFunc: vmManifestInputsFunc,
 	}
 }
 
@@ -61,7 +65,7 @@ func (s *VMSource) SourceCondition() exportv1.Condition {
 }
 
 func (s *VMSource) ReadyCondition() exportv1.Condition {
-	return s.sourceVolumes.readyCondition
+	return s.sourceVolumes.ReadyCondition()
 }
 
 func (s *VMSource) ConfigurePod(pod *corev1.Pod) {
@@ -90,6 +94,76 @@ func (s *VMSource) UpdateStatus(vmExport *exportv1.VirtualMachineExport, pod *co
 	}
 
 	return requeue, nil
+}
+
+func (s *VMSource) ManifestData() (key string, data []byte, extra map[string]string, err error) {
+	if s.vmManifestInputsFunc == nil {
+		return "", nil, nil, nil
+	}
+	vm, dvs, err := s.vmManifestInputsFunc()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return vmManifestData(vm, dvs)
+}
+
+func (s *VMSource) SupportsOCI() bool {
+	return true
+}
+
+func vmManifestData(vm *virtv1.VirtualMachine, dvs []*cdiv1.DataVolume) (key string, data []byte, extra map[string]string, err error) {
+	if vm == nil {
+		return "", nil, nil, nil
+	}
+
+	data, err = generateVMDefinitionFromVm(vm)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	extra, err = extraVMData(dvs)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	return vmManifest, data, extra, nil
+}
+
+func generateVMDefinitionFromVm(vm *virtv1.VirtualMachine) ([]byte, error) {
+	expandedVm := vm.DeepCopy()
+	// Clear status
+	expandedVm.Status = virtv1.VirtualMachineStatus{}
+	expandedVm.ManagedFields = nil
+	cleanedObjectMeta := metav1.ObjectMeta{}
+	cleanedObjectMeta.Name = expandedVm.ObjectMeta.Name
+	cleanedObjectMeta.Namespace = expandedVm.ObjectMeta.Namespace
+	cleanedObjectMeta.Labels = expandedVm.ObjectMeta.Labels
+	cleanedObjectMeta.Annotations = expandedVm.Annotations
+	expandedVm.ObjectMeta = cleanedObjectMeta
+
+	// Update dvTemplates if exists
+	expandedVm, err := updateHttpSourceDataVolumeTemplate(expandedVm)
+	if err != nil {
+		return nil, err
+	}
+	vmBytes, err := json.Marshal(expandedVm)
+	if err != nil {
+		return nil, err
+	}
+	return vmBytes, nil
+}
+
+func extraVMData(dvs []*cdiv1.DataVolume) (map[string]string, error) {
+	extra := make(map[string]string)
+	for _, datavolume := range dvs {
+		if datavolume != nil {
+			dvBytes, err := json.Marshal(datavolume)
+			if err != nil {
+				return nil, err
+			}
+			extra[fmt.Sprintf("dv-%s", datavolume.Name)] = string(dvBytes)
+		}
+	}
+	return extra, nil
 }
 
 func (ctrl *VMExportController) handleVMExport(obj interface{}) {
@@ -231,15 +305,15 @@ func (ctrl *VMExportController) getPVCFromSourceVM(vmExport *exportv1.VirtualMac
 		return sourceVolumes, nil
 	}
 
-	pvcs, allPopulated, err := ctrl.getPVCsFromVM(vm)
+	volumesToExport, allPopulated, err := ctrl.getSourceVolumesFromVM(vm)
 	if err != nil {
 		return nil, err
 	}
-	log.Log.V(3).Infof("Number of volumes found for VM %s/%s, %d, allPopulated %t", vmExport.Namespace, vmExport.Spec.Source.Name, len(pvcs), allPopulated)
+	log.Log.V(3).Infof("Number of volumes found for VM %s/%s, %d, allPopulated %t", vmExport.Namespace, vmExport.Spec.Source.Name, len(volumesToExport), allPopulated)
 
 	sourceVolumes.isPopulated = allPopulated
 
-	if len(pvcs) == 0 {
+	if len(volumesToExport) == 0 {
 		sourceVolumes.isPopulated = true
 		sourceVolumes.readyCondition = newReadyCondition(corev1.ConditionFalse, noVolumeVMReason,
 			fmt.Sprintf("Virtual Machine %s/%s has no volumes", vmExport.Namespace, vmExport.Spec.Source.Name))
@@ -258,13 +332,13 @@ func (ctrl *VMExportController) getPVCFromSourceVM(vmExport *exportv1.VirtualMac
 		}
 	}
 
-	sourceVolumes.volumes = ctrl.pvcsToSourceVolumes(pvcs...)
+	sourceVolumes.volumes = volumesToExport
 
 	return sourceVolumes, nil
 }
 
-func (ctrl *VMExportController) getPVCsFromVM(vm *virtv1.VirtualMachine) ([]*corev1.PersistentVolumeClaim, bool, error) {
-	var pvcs []*corev1.PersistentVolumeClaim
+func (ctrl *VMExportController) getSourceVolumesFromVM(vm *virtv1.VirtualMachine) ([]sourceVolume, bool, error) {
+	var volumesToExport []sourceVolume
 	allPopulated := true
 
 	volumes, err := storageutils.GetVolumes(vm, ctrl.Client, storageutils.WithAllVolumes)
@@ -290,7 +364,7 @@ func (ctrl *VMExportController) getPVCsFromVM(vm *virtv1.VirtualMachine) ([]*cor
 			if err != nil {
 				return nil, false, err
 			}
-			pvcs = append(pvcs, pvc)
+			volumesToExport = append(volumesToExport, ctrl.newSourceVolume(pvc, volume.Name))
 			if !populated {
 				allPopulated = false
 			}
@@ -303,7 +377,7 @@ func (ctrl *VMExportController) getPVCsFromVM(vm *virtv1.VirtualMachine) ([]*cor
 			allPopulated = false
 		}
 	}
-	return pvcs, allPopulated, nil
+	return volumesToExport, allPopulated, nil
 }
 
 func (ctrl *VMExportController) isSourceVM(source *exportv1.VirtualMachineExportSpec) bool {

@@ -20,11 +20,11 @@ package export
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -58,7 +58,7 @@ import (
 
 	vsv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	framework "k8s.io/client-go/tools/cache/testing"
-	backupv1 "kubevirt.io/api/backup/v1alpha1"
+	backupv1 "kubevirt.io/api/backup/v1beta1"
 	virtv1 "kubevirt.io/api/core/v1"
 	exportv1 "kubevirt.io/api/export/v1"
 	snapshotv1 "kubevirt.io/api/snapshot/v1beta1"
@@ -527,6 +527,129 @@ var _ = Describe("Export controller", func() {
 		}
 	}
 
+	Context("checkPod terminal-phase handling", func() {
+		var vmExport *exportv1.VirtualMachineExport
+
+		BeforeEach(func() {
+			vmExport = createPVCVMExport()
+			vmExport.CreationTimestamp = metav1.Now() // keep the export TTL from firing
+		})
+
+		succeededPod := func() *k8sv1.Pod {
+			pod := &k8sv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "exporter", Namespace: testNamespace},
+				Status:     k8sv1.PodStatus{Phase: k8sv1.PodSucceeded},
+			}
+			_, err := k8sClient.CoreV1().Pods(testNamespace).Create(context.Background(), pod, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			return pod
+		}
+
+		podExists := func(name string) bool {
+			_, err := k8sClient.CoreV1().Pods(testNamespace).Get(context.Background(), name, metav1.GetOptions{})
+			return !errors.IsNotFound(err)
+		}
+
+		pushSource := func() *OfflineVMBackupSource {
+			backup := &backupv1.VirtualMachineBackup{
+				ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: testNamespace},
+				Spec:       backupv1.VirtualMachineBackupSpec{Mode: pointer.P(backupv1.PushMode)},
+				Status:     &backupv1.VirtualMachineBackupStatus{},
+			}
+			return NewOfflineVMBackupSource(backup, "testvm", nil, nil, nil, "", false, nil)
+		}
+
+		It("keeps a succeeded offline-push exporter pod (one-shot job) for the backup controller to observe", func() {
+			pod := succeededPod()
+			Expect(controller.checkPod(vmExport, pod, pushSource())).To(Succeed())
+			Expect(podExists(pod.Name)).To(BeTrue())
+		})
+
+		It("deletes a succeeded pod for a recyclable (non-push) source", func() {
+			pod := succeededPod()
+			Expect(controller.checkPod(vmExport, pod, NewPVCSource(nil))).To(Succeed())
+			Expect(podExists(pod.Name)).To(BeFalse())
+		})
+
+		pullSource := func() *OfflineVMBackupSource {
+			backup := &backupv1.VirtualMachineBackup{
+				ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: testNamespace},
+				Spec:       backupv1.VirtualMachineBackupSpec{Mode: pointer.P(backupv1.PullMode)},
+				Status:     &backupv1.VirtualMachineBackupStatus{},
+			}
+			return NewOfflineVMBackupSource(backup, "testvm", nil, nil, nil, "", false, nil)
+		}
+
+		It("keeps a failed offline pull exporter pod instead of recycling it, so the failure can surface", func() {
+			pod := &k8sv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "exporter", Namespace: testNamespace},
+				Status:     k8sv1.PodStatus{Phase: k8sv1.PodFailed},
+			}
+			_, err := k8sClient.CoreV1().Pods(testNamespace).Create(context.Background(), pod, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(controller.checkPod(vmExport, pod, pullSource())).To(Succeed())
+			Expect(podExists(pod.Name)).To(BeTrue())
+		})
+
+		It("deletes a succeeded offline pull exporter pod so it is recreated with fresh certs", func() {
+			pod := succeededPod()
+			Expect(controller.checkPod(vmExport, pod, pullSource())).To(Succeed())
+			Expect(podExists(pod.Name)).To(BeFalse())
+		})
+
+		It("does not expire an offline push export past the default TTL, since it has no pull client", func() {
+			vmExport.CreationTimestamp = metav1.NewTime(time.Now().Add(-3 * time.Hour))
+			_, err := controller.Client.VirtualMachineExport(testNamespace).Create(context.Background(), vmExport, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			pod := succeededPod()
+			Expect(controller.checkPod(vmExport, pod, pushSource())).To(Succeed())
+			_, err = controller.Client.VirtualMachineExport(testNamespace).Get(context.Background(), vmExport.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("does not recreate a running offline push pod when cert params change, so a long convert is not restarted", func() {
+			pod := &k8sv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "exporter", Namespace: testNamespace, Annotations: map[string]string{annCertParams: "stale"}},
+				Status:     k8sv1.PodStatus{Phase: k8sv1.PodRunning},
+			}
+			_, err := k8sClient.CoreV1().Pods(testNamespace).Create(context.Background(), pod, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(controller.checkPod(vmExport, pod, pushSource())).To(Succeed())
+			Expect(podExists(pod.Name)).To(BeTrue())
+		})
+
+		It("still expires an offline pull export past the default TTL", func() {
+			vmExport.CreationTimestamp = metav1.NewTime(time.Now().Add(-3 * time.Hour))
+			_, err := controller.Client.VirtualMachineExport(testNamespace).Create(context.Background(), vmExport, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			pod := succeededPod()
+			Expect(controller.checkPod(vmExport, pod, pullSource())).To(Succeed())
+			_, err = controller.Client.VirtualMachineExport(testNamespace).Get(context.Background(), vmExport.Name, metav1.GetOptions{})
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("surfaces PodFailed on the Ready condition for a failed offline pull pod, not just push", func() {
+			populateInitialVMExportStatus(vmExport)
+			vmExportCopy := vmExport.DeepCopy()
+			svc := &k8sv1.Service{ObjectMeta: metav1.ObjectMeta{Name: "test-svc", Namespace: testNamespace}}
+			pod := &k8sv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "exporter", Namespace: testNamespace},
+				Status:     k8sv1.PodStatus{Phase: k8sv1.PodFailed},
+			}
+
+			err := controller.updateCommonVMExportStatusFields(vmExport, vmExportCopy, pod, svc, pullSource())
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(vmExportCopy.Status.Conditions).To(ContainElement(gstruct.MatchFields(gstruct.IgnoreExtras, gstruct.Fields{
+				"Type":   Equal(exportv1.ConditionReady),
+				"Status": Equal(k8sv1.ConditionFalse),
+				"Reason": Equal(podFailedReason),
+			})))
+		})
+	})
+
 	It("should add vmexport to queue if matching PVC is added", func() {
 		vmExport := createPVCVMExport()
 		pvc := &k8sv1.PersistentVolumeClaim{
@@ -768,7 +891,7 @@ var _ = Describe("Export controller", func() {
 			return true, service, nil
 		})
 
-		service, err := controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err := controller.getOrCreateExportService(testVMExport)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(service).ToNot(BeNil())
 		Expect(service.Status.Conditions[0].Type).To(Equal("test"))
@@ -792,7 +915,7 @@ var _ = Describe("Export controller", func() {
 				},
 			}),
 		).To(Succeed())
-		service, err = controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err = controller.getOrCreateExportService(testVMExport)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(service).ToNot(BeNil())
 		Expect(service.Status.Conditions[0].Type).To(Equal("test2"))
@@ -829,7 +952,7 @@ var _ = Describe("Export controller", func() {
 			return true, nil, nil
 		})
 
-		service, err := controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err := controller.getOrCreateExportService(testVMExport)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(service).To(Equal(existing))
 	},
@@ -858,7 +981,7 @@ var _ = Describe("Export controller", func() {
 			return true, nil, errors.NewAlreadyExists(schema.GroupResource{Resource: "services"}, controller.getExportServiceName(testVMExport))
 		})
 
-		service, err := controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err := controller.getOrCreateExportService(testVMExport)
 		Expect(errors.IsAlreadyExists(err)).To(BeTrue())
 		Expect(service).To(BeNil())
 	})
@@ -914,7 +1037,7 @@ var _ = Describe("Export controller", func() {
 		vmSnapshotInformer.GetStore().Add(snapshot)
 		return testVMExport
 	}
-	type createSourceFunc func(volumes *sourceVolumes) exportSource
+	type createSourceFunc func(volumes *sourceVolumes, vmExport *exportv1.VirtualMachineExport) exportSource
 
 	DescribeTable("Should create a pod based on the name of the VMExport", func(populateExportFunc func() *exportv1.VirtualMachineExport, createSource createSourceFunc, numberOfVolumes int) {
 		testPVC := &k8sv1.PersistentVolumeClaim{
@@ -930,10 +1053,10 @@ var _ = Describe("Export controller", func() {
 		populateInitialVMExportStatus(testVMExport)
 
 		sv := &sourceVolumes{
-			volumes:     controller.pvcsToSourceVolumes(testPVC),
+			volumes:     []sourceVolume{controller.newSourceVolume(testPVC, "")},
 			isPopulated: true,
 		}
-		source := createSource(sv)
+		source := createSource(sv, testVMExport)
 		err := controller.handleVMExportToken(testVMExport, source)
 		Expect(testVMExport.Status.TokenSecretRef).ToNot(BeNil())
 		Expect(err).ToNot(HaveOccurred())
@@ -959,7 +1082,7 @@ var _ = Describe("Export controller", func() {
 			Expect(service.GetNamespace()).To(Equal(testNamespace))
 			return true, service, nil
 		})
-		service, err = controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err = controller.getOrCreateExportService(testVMExport)
 		Expect(err).ToNot(HaveOccurred())
 		pod, err := controller.createExporterPod(testVMExport, service, source)
 		Expect(err).ToNot(HaveOccurred())
@@ -973,7 +1096,7 @@ var _ = Describe("Export controller", func() {
 			}
 		}
 		Expect(pod.Spec.Volumes).To(ContainElement(k8sv1.Volume{
-			Name: testPVCName,
+			Name: "vol0",
 			VolumeSource: k8sv1.VolumeSource{
 				PersistentVolumeClaim: &k8sv1.PersistentVolumeClaimVolumeSource{
 					ClaimName: testPVCName,
@@ -1009,8 +1132,8 @@ var _ = Describe("Export controller", func() {
 		}))
 		Expect(pod.Spec.Containers[0].VolumeDevices).To(HaveLen(1))
 		Expect(pod.Spec.Containers[0].VolumeDevices).To(ContainElement(k8sv1.VolumeDevice{
-			Name:       testPVC.Name,
-			DevicePath: fmt.Sprintf("%s/%s", blockVolumeMountPath, testPVC.Name),
+			Name:       "vol0",
+			DevicePath: blockVolumeMountPath + "/vol0",
 		}))
 		Expect(pod.Labels).To(And(
 			HaveKeyWithValue(exportServiceLabel, controller.getExportLabelValue(testVMExport)),
@@ -1034,26 +1157,31 @@ var _ = Describe("Export controller", func() {
 	},
 		Entry("PVC",
 			createPVCVMExport,
-			func(sv *sourceVolumes) exportSource {
+			func(sv *sourceVolumes, _ *exportv1.VirtualMachineExport) exportSource {
 				return NewPVCSource(sv)
 			},
 			3),
 		Entry("PVC, with long name export",
 			createPVCVMExportLongName,
-			func(sv *sourceVolumes) exportSource {
+			func(sv *sourceVolumes, _ *exportv1.VirtualMachineExport) exportSource {
 				return NewPVCSource(sv)
 			},
 			3),
 		Entry("VM",
 			populateVmExportVM,
-			func(sv *sourceVolumes) exportSource {
-				return NewVMSource(sv)
+			func(sv *sourceVolumes, vmExport *exportv1.VirtualMachineExport) exportSource {
+				return NewVMSource(sv, func() (*virtv1.VirtualMachine, []*cdiv1.DataVolume, error) {
+					return controller.getVMManifestInputs(vmExport.Namespace, vmExport.Spec.Source.Name)
+				})
 			},
 			4),
 		Entry("Snapshot",
 			populateVmExportVMSnapshot,
-			func(sv *sourceVolumes) exportSource {
-				return NewVMSnapshotSource(sv, "test-vm-name")
+			func(sv *sourceVolumes, vmExport *exportv1.VirtualMachineExport) exportSource {
+				vmName := controller.getVmNameFromVmSnapshot(vmExport)
+				return NewVMSnapshotSource(sv, vmName, func() (*virtv1.VirtualMachine, []*cdiv1.DataVolume, error) {
+					return controller.getVMManifestInputs(vmExport.Namespace, vmName)
+				})
 			},
 			4),
 	)
@@ -1094,6 +1222,37 @@ var _ = Describe("Export controller", func() {
 		))
 	})
 
+	DescribeTable("TLS_CURVE_PREFERENCES env var in exporter pod", func(featureGates []string, expectEnvVar bool) {
+		groups := []string{"X25519", "secp384r1"}
+		kvObj, _, _ := kvInformer.GetStore().GetByKey(controller.KubevirtNamespace + "/kv")
+		kv := kvObj.(*virtv1.KubeVirt)
+		kv.Spec.Configuration.TLSConfiguration = &virtv1.TLSConfiguration{
+			Groups: groups,
+		}
+		if len(featureGates) > 0 {
+			kv.Spec.Configuration.DeveloperConfiguration = &virtv1.DeveloperConfiguration{
+				FeatureGates: featureGates,
+			}
+		}
+		kv.ResourceVersion = "tls-groups-table"
+		Expect(kvInformer.GetStore().Update(kv)).To(Succeed())
+
+		pod, err := controller.createExporterPodManifest(createPVCVMExport(), nil, NewPVCSource(&sourceVolumes{}))
+		Expect(err).ToNot(HaveOccurred())
+		matcher := gstruct.MatchFields(gstruct.IgnoreExtras, gstruct.Fields{"Name": Equal("TLS_CURVE_PREFERENCES")})
+		if expectEnvVar {
+			Expect(pod.Spec.Containers[0].Env).To(ContainElement(gstruct.MatchFields(gstruct.IgnoreExtras, gstruct.Fields{
+				"Name":  Equal("TLS_CURVE_PREFERENCES"),
+				"Value": Equal(fmt.Sprintf("[%d,%d]", tls.CurveP384, tls.X25519)),
+			})))
+		} else {
+			Expect(pod.Spec.Containers[0].Env).ToNot(ContainElement(matcher))
+		}
+	},
+		Entry("should set when TLSGroupPreferences gate is enabled", []string{featuregate.TLSGroupPreferences}, true),
+		Entry("should not set when TLSGroupPreferences gate is disabled", nil, false),
+	)
+
 	DescribeTable("Should set export pod env vars", func(vmExport *exportv1.VirtualMachineExport, source exportSource, expectManifest bool) {
 		pod, err := controller.createExporterPodManifest(vmExport, nil, source)
 		Expect(err).ToNot(HaveOccurred())
@@ -1109,8 +1268,8 @@ var _ = Describe("Export controller", func() {
 			))
 		}
 	},
-		Entry("for VM source", createVMVMExport(), NewVMSource(&sourceVolumes{}), true),
-		Entry("for VM Snapshot source", createSnapshotVMExport(), NewVMSnapshotSource(&sourceVolumes{}, "test-vm"), true),
+		Entry("for VM source", createVMVMExport(), NewVMSource(&sourceVolumes{}, nil), true),
+		Entry("for VM Snapshot source", createSnapshotVMExport(), NewVMSnapshotSource(&sourceVolumes{}, "test-vm", nil), true),
 		Entry("for PVC source", createPVCVMExport(), NewPVCSource(&sourceVolumes{}), false),
 	)
 
@@ -1125,7 +1284,7 @@ var _ = Describe("Export controller", func() {
 		})
 
 		svc := &k8sv1.Service{ObjectMeta: metav1.ObjectMeta{Name: "test-svc", Namespace: testNamespace}}
-		pod, err := controller.createExporterPodManifest(createVMVMExport(), svc, NewVMSource(&sourceVolumes{}))
+		pod, err := controller.createExporterPodManifest(createVMVMExport(), svc, NewVMSource(&sourceVolumes{}, nil))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pod.Spec.Containers[0].Env).To(ContainElement(
 			k8sv1.EnvVar{Name: "EXPORT_OCI_URI", Value: ociPath},
@@ -1151,23 +1310,14 @@ var _ = Describe("Export controller", func() {
 		))
 	})
 
-	DescribeTable("supportsOCI", func(vmExport *exportv1.VirtualMachineExport, expected bool) {
-		Expect(controller.supportsOCI(&vmExport.Spec)).To(Equal(expected))
+	DescribeTable("SupportsOCI", func(source exportSource, expected bool) {
+		Expect(source.SupportsOCI()).To(Equal(expected))
 	},
-		Entry("returns true for VM source", createVMVMExport(), true),
-		Entry("returns true for VMSnapshot source", createSnapshotVMExport(), true),
-		Entry("returns true for VMTemplate source", createVMTemplateVMExport(), true),
-		Entry("returns false for PVC source", createPVCVMExport(), false),
-		Entry("returns false for Backup source", &exportv1.VirtualMachineExport{
-			ObjectMeta: createVMExportMeta(vmExportName),
-			Spec: exportv1.VirtualMachineExportSpec{
-				Source: k8sv1.TypedLocalObjectReference{
-					APIGroup: &backupv1.SchemeGroupVersion.Group,
-					Kind:     "VirtualMachineBackup",
-					Name:     "test-backup",
-				},
-			},
-		}, false),
+		Entry("returns true for VM source", NewVMSource(&sourceVolumes{}, nil), true),
+		Entry("returns true for VMSnapshot source", NewVMSnapshotSource(&sourceVolumes{}, "test-vm", nil), true),
+		Entry("returns true for VMTemplate source", NewVMTemplateSource(nil, &sourceVolumes{}), true),
+		Entry("returns false for PVC source", NewPVCSource(&sourceVolumes{}), false),
+		Entry("returns false for Backup source", NewVMBackupSource(nil, nil), false),
 	)
 
 	DescribeTable("should set OCIReady condition when OCI export is enabled", func(vmExport *exportv1.VirtualMachineExport, source exportSource, pod *k8sv1.Pod, expectedStatus k8sv1.ConditionStatus, expectedReason string) {
@@ -1187,14 +1337,14 @@ var _ = Describe("Export controller", func() {
 			"Reason": Equal(expectedReason),
 		})))
 	},
-		Entry("VM source, pod ready", createVMVMExport(), NewVMSource(&sourceVolumes{}), &k8sv1.Pod{
+		Entry("VM source, pod ready", createVMVMExport(), NewVMSource(&sourceVolumes{}, nil), &k8sv1.Pod{
 			Spec:   k8sv1.PodSpec{Containers: []k8sv1.Container{{Name: "export"}}},
 			Status: k8sv1.PodStatus{Phase: k8sv1.PodRunning, ContainerStatuses: []k8sv1.ContainerStatus{{Ready: true}}},
 		}, k8sv1.ConditionTrue, ociDigestsComputedReason),
-		Entry("VM source, pod pending", createVMVMExport(), NewVMSource(&sourceVolumes{}), &k8sv1.Pod{
+		Entry("VM source, pod pending", createVMVMExport(), NewVMSource(&sourceVolumes{}, nil), &k8sv1.Pod{
 			Status: k8sv1.PodStatus{Phase: k8sv1.PodPending},
 		}, k8sv1.ConditionFalse, ociDigestsPendingReason),
-		Entry("VMSnapshot source, pod ready", createSnapshotVMExport(), NewVMSnapshotSource(&sourceVolumes{}, "test-vm"), &k8sv1.Pod{
+		Entry("VMSnapshot source, pod ready", createSnapshotVMExport(), NewVMSnapshotSource(&sourceVolumes{}, "test-vm", nil), &k8sv1.Pod{
 			Spec:   k8sv1.PodSpec{Containers: []k8sv1.Container{{Name: "export"}}},
 			Status: k8sv1.PodStatus{Phase: k8sv1.PodRunning, ContainerStatuses: []k8sv1.ContainerStatus{{Ready: true}}},
 		}, k8sv1.ConditionTrue, ociDigestsComputedReason),
@@ -1226,12 +1376,12 @@ var _ = Describe("Export controller", func() {
 		}
 	},
 		Entry("PVC source, gate enabled", createPVCVMExport(), NewPVCSource(&sourceVolumes{}), true),
-		Entry("VM source, gate disabled", createVMVMExport(), NewVMSource(&sourceVolumes{}), false),
-		Entry("VMSnapshot source, gate disabled", createSnapshotVMExport(), NewVMSnapshotSource(&sourceVolumes{}, "test-vm"), false),
+		Entry("VM source, gate disabled", createVMVMExport(), NewVMSource(&sourceVolumes{}, nil), false),
+		Entry("VMSnapshot source, gate disabled", createSnapshotVMExport(), NewVMSnapshotSource(&sourceVolumes{}, "test-vm", nil), false),
 		Entry("VMTemplate source, gate disabled", createVMTemplateVMExport(), NewVMTemplateSource(nil, &sourceVolumes{}), false),
 	)
 
-	DescribeTable("Volumemount names should be trimmed depending on the PVC name", func(pvcName string) {
+	DescribeTable("Volumemount names should not depend on the PVC name", func(pvcName string) {
 		testVMExport := createPVCVMExportWithName(pvcName)
 		testPVC := &k8sv1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1244,10 +1394,10 @@ var _ = Describe("Export controller", func() {
 		}
 		populateInitialVMExportStatus(testVMExport)
 		sv := &sourceVolumes{
-			volumes:     controller.pvcsToSourceVolumes(testPVC),
+			volumes:     []sourceVolume{controller.newSourceVolume(testPVC, "")},
 			isPopulated: true,
 		}
-		snapSource := NewVMSnapshotSource(sv, "test-vm-name")
+		snapSource := NewVMSnapshotSource(sv, "test-vm-name", nil)
 		err := controller.handleVMExportToken(testVMExport, snapSource)
 		Expect(testVMExport.Status.TokenSecretRef).ToNot(BeNil())
 		Expect(err).ToNot(HaveOccurred())
@@ -1273,7 +1423,7 @@ var _ = Describe("Export controller", func() {
 			Expect(service.GetNamespace()).To(Equal(testNamespace))
 			return true, service, nil
 		})
-		service, err = controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err = controller.getOrCreateExportService(testVMExport)
 		Expect(err).ToNot(HaveOccurred())
 		pod, err := controller.createExporterPod(testVMExport, service, snapSource)
 		Expect(err).ToNot(HaveOccurred())
@@ -1281,45 +1431,106 @@ var _ = Describe("Export controller", func() {
 		Expect(pod.Spec.Containers).To(HaveLen(1))
 		Expect(pod.Spec.Containers[0].VolumeDevices).To(HaveLen(1))
 		Expect(pod.Spec.Containers[0].VolumeDevices).To(ContainElement(k8sv1.VolumeDevice{
-			Name:       getExportPodVolumeName(testPVC),
-			DevicePath: fmt.Sprintf("%s/%s", blockVolumeMountPath, getExportPodVolumeName(testPVC)),
+			Name:       "vol0",
+			DevicePath: blockVolumeMountPath + "/vol0",
 		}))
-		if len(pvcName) > validation.DNS1035LabelMaxLength {
-			Expect(len(pod.Spec.Containers[0].VolumeDevices[0].Name)).To(BeNumerically("<", 63))
-		} else {
-			Expect(pod.Spec.Containers[0].VolumeDevices[0].Name).To(Equal(pvcName))
+		volumeNames := map[string]bool{}
+		for _, volume := range pod.Spec.Volumes {
+			Expect(volumeNames).ToNot(HaveKey(volume.Name))
+			volumeNames[volume.Name] = true
 		}
 	},
 		Entry("PVC name within limit", "pvc-name-within-limit"),
 		Entry("PVC name exceeding limit", strings.Repeat("a", validation.DNS1035LabelMaxLength+1)),
 		Entry("PVC name with same length as limit", strings.Repeat("a", validation.DNS1035LabelMaxLength)),
+		Entry("PVC name of a fixed exporter pod volume", tokenVolName),
 	)
 
-	DescribeTable("GetVolumeInfo should correctly resolve volume paths for various PVC names", func(pvcName string) {
-		targetName := getExportPodVolumeNameFromStr(pvcName)
-		sp := &ServerPaths{
-			Volumes: []VolumeInfo{
-				{
-					Path: "/var/run/kubevirt-export/" + targetName,
+	It("Volumemount names should not collide for claims differing only in dots", func() {
+		sv := &sourceVolumes{}
+		for _, name := range []string{"my.disk", "my-disk"} {
+			sv.volumes = append(sv.volumes, sourceVolume{
+				pvc: &k8sv1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
 				},
-			},
+			})
 		}
 
-		result := sp.GetVolumeInfo(pvcName)
-		Expect(result).ToNot(BeNil())
+		pod := &k8sv1.Pod{Spec: k8sv1.PodSpec{Containers: []k8sv1.Container{{}}}}
+		sv.configurePodVolumes(pod)
 
-		_, foundName := filepath.Split(filepath.Clean(result.Path))
-		Expect(foundName).To(Equal(targetName))
+		Expect(pod.Spec.Volumes).To(HaveLen(2))
+		Expect(pod.Spec.Volumes[0].Name).ToNot(Equal(pod.Spec.Volumes[1].Name))
+		Expect(pod.Spec.Containers[0].VolumeMounts).To(HaveLen(2))
+		Expect(pod.Spec.Containers[0].VolumeMounts[0].MountPath).ToNot(Equal(pod.Spec.Containers[0].VolumeMounts[1].MountPath))
 
-		if len(pvcName) > validation.DNS1035LabelMaxLength {
-			Expect(len(foundName)).To(BeNumerically("<", 63))
-			Expect(foundName).To(HavePrefix(exportPrefix))
+		paths := serverPathsForPod(pod)
+		Expect(paths.GetVolumeInfo("my.disk").Path).To(Equal(pod.Spec.Containers[0].VolumeMounts[0].MountPath))
+		Expect(paths.GetVolumeInfo("my-disk").Path).To(Equal(pod.Spec.Containers[0].VolumeMounts[1].MountPath))
+	})
+
+	DescribeTable("sourceVolumes should report PVCs referenced by more than one volume", func(pvcNames []string, expectedDuplicates []string) {
+		sv := &sourceVolumes{
+			isPopulated:    true,
+			readyCondition: newReadyCondition(k8sv1.ConditionTrue, podReadyReason, ""),
+		}
+		for _, name := range pvcNames {
+			sv.volumes = append(sv.volumes, sourceVolume{
+				pvc: &k8sv1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name}},
+			})
+		}
+
+		Expect(sv.duplicatePVCNames()).To(Equal(expectedDuplicates))
+		Expect(sv.isSourceAvailable()).To(Equal(len(expectedDuplicates) == 0))
+
+		condition := sv.ReadyCondition()
+		Expect(condition.Type).To(Equal(exportv1.ConditionReady))
+		if len(expectedDuplicates) == 0 {
+			Expect(condition.Status).To(Equal(k8sv1.ConditionTrue))
+			Expect(condition.Reason).ToNot(Equal(duplicatePVCReason))
+			return
+		}
+		Expect(condition.Status).To(Equal(k8sv1.ConditionFalse))
+		Expect(condition.Reason).To(Equal(duplicatePVCReason))
+		for _, name := range expectedDuplicates {
+			Expect(condition.Message).To(ContainSubstring(name))
 		}
 	},
-		Entry("Short name", "pvc-name"),
-		Entry("Name with dots", "pvc.with.dots"),
-		Entry("Long name exceeding limit", strings.Repeat("a", validation.DNS1035LabelMaxLength+1)),
+		Entry("no volumes", nil, []string{}),
+		Entry("distinct PVCs", []string{"pvc1", "pvc2"}, []string{}),
+		Entry("names differing only by dots", []string{"my.disk", "my-disk"}, []string{}),
+		Entry("one PVC twice", []string{"shared", "shared"}, []string{"shared"}),
+		Entry("one PVC three times reported once", []string{"shared", "shared", "shared"}, []string{"shared"}),
+		Entry("two duplicates sorted", []string{"b", "a", "b", "a"}, []string{"a", "b"}),
 	)
+
+	It("serverPathsForPod should resolve volumes by the claim mounted at their path", func() {
+		sv := &sourceVolumes{}
+		for _, pvc := range []*k8sv1.PersistentVolumeClaim{
+			{ObjectMeta: metav1.ObjectMeta{Name: "pvc.with.dots"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: strings.Repeat("a", validation.DNS1035LabelMaxLength+1)}},
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "block-disk"},
+				Spec:       k8sv1.PersistentVolumeClaimSpec{VolumeMode: pointer.P(k8sv1.PersistentVolumeBlock)},
+			},
+		} {
+			sv.volumes = append(sv.volumes, sourceVolume{pvc: pvc, volumeName: "volume-of-" + pvc.Name})
+		}
+		pod := &k8sv1.Pod{Spec: k8sv1.PodSpec{Containers: []k8sv1.Container{{}}}}
+		sv.configurePodVolumes(pod)
+
+		paths := serverPathsForPod(pod)
+		volumePaths := map[string]bool{}
+		for _, volume := range sv.volumes {
+			vi := paths.GetVolumeInfo(volume.pvc.Name)
+			Expect(vi).ToNot(BeNil())
+			Expect(vi.VolumeName).To(Equal(volume.volumeName))
+			volumePaths[vi.Path] = true
+		}
+		Expect(volumePaths).To(HaveLen(len(sv.volumes)))
+		Expect(paths.GetVolumeInfo("block-disk").Path).To(HavePrefix(blockVolumeMountPath))
+		Expect(paths.GetVolumeInfo("does-not-exist")).To(BeNil())
+	})
 
 	It("CreateServerPaths should parse OCI URI", func() {
 		const uri = "/export.oci.tar"
@@ -1353,7 +1564,7 @@ var _ = Describe("Export controller", func() {
 			return true, service, nil
 		})
 
-		service, err := controller.getOrCreateExportService(testVMExport, NewPVCSource(nil))
+		service, err := controller.getOrCreateExportService(testVMExport)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(service).ToNot(BeNil())
 		Expect(service.Status.Conditions[0].Type).To(Equal("test"))
@@ -1452,7 +1663,7 @@ var _ = Describe("Export controller", func() {
 		}
 		Expect(controller.PVCInformer.GetStore().Add(pvc)).To(Succeed())
 		sv := &sourceVolumes{
-			volumes:     controller.pvcsToSourceVolumes(pvc),
+			volumes:     []sourceVolume{controller.newSourceVolume(pvc, "")},
 			isPopulated: true,
 		}
 		pvcSource := NewPVCSource(sv)
@@ -1511,7 +1722,7 @@ var _ = Describe("Export controller", func() {
 			return true, secret, nil
 		})
 		sv := &sourceVolumes{
-			volumes:     controller.pvcsToSourceVolumes(pvc),
+			volumes:     []sourceVolume{controller.newSourceVolume(pvc, "")},
 			isPopulated: true,
 		}
 		pvcSource := NewPVCSource(sv)
@@ -1676,7 +1887,7 @@ var _ = Describe("Export controller", func() {
 			},
 		}
 		cmName := controller.getVmManifestConfigMapName(testVMExport)
-		vmBytes, err := controller.generateVMDefinitionFromVm(vm)
+		vmBytes, err := generateVMDefinitionFromVm(vm)
 		Expect(err).ToNot(HaveOccurred())
 		k8sClient.Fake.PrependReactor("create", "configmaps", func(action testing.Action) (handled bool, obj runtime.Object, err error) {
 			create, ok := action.(testing.CreateAction)
@@ -1690,7 +1901,7 @@ var _ = Describe("Export controller", func() {
 			Expect(cm.Data[vmManifest]).To(Equal(string(vmBytes)))
 			return true, cm, nil
 		})
-		extra, err := controller.extraVMData(vm)
+		extra, err := extraVMData(nil)
 		Expect(err).ToNot(HaveOccurred())
 		err = controller.reconcileManifestAndAddToPod(testVMExport, vmManifest, vmBytes, testPod, service, extra)
 		Expect(err).ToNot(HaveOccurred())
@@ -1723,9 +1934,9 @@ var _ = Describe("Export controller", func() {
 				},
 			}
 		}
-		vmBytes, err := controller.generateVMDefinitionFromVm(vm)
+		vmBytes, err := generateVMDefinitionFromVm(vm)
 		Expect(err).ToNot(HaveOccurred())
-		extra, err := controller.extraVMData(vm)
+		extra, err := extraVMData(nil)
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(controller.reconcileManifestAndAddToPod(testVMExport, vmManifest, vmBytes, newPod(), service, extra)).To(Succeed())
@@ -1802,9 +2013,9 @@ var _ = Describe("Export controller", func() {
 				Containers: []k8sv1.Container{{}},
 			},
 		}
-		vmBytes, err := controller.generateVMDefinitionFromVm(vm)
+		vmBytes, err := generateVMDefinitionFromVm(vm)
 		Expect(err).ToNot(HaveOccurred())
-		extra, err := controller.extraVMData(vm)
+		extra, err := extraVMData(nil)
 		Expect(err).ToNot(HaveOccurred())
 		manifest, err := controller.createManifestConfigMap(testVMExport, vmManifest, vmBytes, service, extra)
 		Expect(err).ToNot(HaveOccurred())
@@ -1849,9 +2060,9 @@ var _ = Describe("Export controller", func() {
 				Containers: []k8sv1.Container{{}},
 			},
 		}
-		vmBytes, err := controller.generateVMDefinitionFromVm(vm)
+		vmBytes, err := generateVMDefinitionFromVm(vm)
 		Expect(err).ToNot(HaveOccurred())
-		extra, err := controller.extraVMData(vm)
+		extra, err := extraVMData(nil)
 		Expect(err).ToNot(HaveOccurred())
 		manifest, err := controller.createManifestConfigMap(testVMExport, vmManifest, vmBytes, service, extra)
 		Expect(err).ToNot(HaveOccurred())
@@ -1997,9 +2208,9 @@ var _ = Describe("Export controller", func() {
 			return false, nil, nil
 		})
 
-		vmBytes, err := controller.generateVMDefinitionFromVm(vm)
+		vmBytes, err := generateVMDefinitionFromVm(vm)
 		Expect(err).ToNot(HaveOccurred())
-		extra, err := controller.extraVMData(vm)
+		extra, err := extraVMData(nil)
 		Expect(err).ToNot(HaveOccurred())
 		err = controller.reconcileManifestAndAddToPod(testVMExport, vmManifest, vmBytes, testPod, service, extra)
 		Expect(err).ToNot(HaveOccurred())
@@ -2062,8 +2273,11 @@ var _ = Describe("Export controller", func() {
 			},
 		}
 		Expect(instancetypeInformer.GetStore().Add(testInstanceType)).To(Succeed())
+		Expect(vmInformer.GetStore().Add(vm)).To(Succeed())
 
-		res, err := controller.generateVMDefinitionFromVm(vm)
+		resolvedVm, _, err := controller.getVMManifestInputs(vm.Namespace, vm.Name)
+		Expect(err).ToNot(HaveOccurred())
+		res, err := generateVMDefinitionFromVm(resolvedVm)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(res).ToNot(BeNil())
 
@@ -2096,9 +2310,66 @@ var _ = Describe("Export controller", func() {
 			},
 		}
 		Expect(instancetypeInformer.GetStore().Add(testInstanceType)).To(Succeed())
+		Expect(vmInformer.GetStore().Add(vm)).To(Succeed())
 
-		_, err := controller.generateVMDefinitionFromVm(vm)
+		_, _, err := controller.getVMManifestInputs(vm.Namespace, vm.Name)
 		Expect(err).To(MatchError(ContainSubstring("VM field(s) spec.template.spec.domain.cpu.cores conflicts with selected instance type")))
+	})
+
+	It("Should manage an existing exporter pod when VM manifest inputs cannot be resolved", func() {
+		testVMExport := createVMVMExport()
+		Expect(controller.PodInformer.GetStore().Add(&k8sv1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      controller.getExportPodName(testVMExport),
+				Namespace: testNamespace,
+			},
+			Status: k8sv1.PodStatus{Phase: k8sv1.PodSucceeded},
+		})).To(Succeed())
+		Expect(controller.VMInformer.GetStore().Add(&virtv1.VirtualMachine{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testVmName,
+				Namespace: testNamespace,
+			},
+			Spec: virtv1.VirtualMachineSpec{
+				Template: &virtv1.VirtualMachineInstanceTemplateSpec{
+					Spec: virtv1.VirtualMachineInstanceSpec{
+						Volumes: []virtv1.Volume{
+							{
+								Name: "volume1",
+								VolumeSource: virtv1.VolumeSource{
+									DataVolume: &virtv1.DataVolumeSource{
+										Name: "volume1",
+									},
+								},
+							},
+						},
+					},
+				},
+				Instancetype: &virtv1.InstancetypeMatcher{
+					Name: "missing-instance-type",
+					Kind: apiinstancetype.SingularResourceName,
+				},
+			},
+		})).To(Succeed())
+		Expect(controller.PVCInformer.GetStore().Add(createPVC("volume1", "kubevirt"))).To(Succeed())
+
+		updateCalled := false
+		vmExportClient.Fake.PrependReactor("update", "virtualmachineexports", func(action testing.Action) (bool, runtime.Object, error) {
+			update, ok := action.(testing.UpdateAction)
+			Expect(ok).To(BeTrue())
+			updated, ok := update.GetObject().(*exportv1.VirtualMachineExport)
+			Expect(ok).To(BeTrue())
+			Expect(updated.Status.Phase).To(Equal(exportv1.Terminated))
+			updateCalled = true
+			return true, updated, nil
+		})
+
+		retry, err := controller.updateVMExport(testVMExport)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(retry).To(BeEquivalentTo(0))
+		Expect(updateCalled).To(BeTrue())
+		testutils.ExpectEvent(recorder, serviceCreatedEvent)
+		testutils.ExpectEvent(recorder, exporterPodFailedOrCompletedEvent)
 	})
 
 	createVMWithDVTemplateAndPVC := func() *virtv1.VirtualMachine {
@@ -2144,7 +2415,7 @@ var _ = Describe("Export controller", func() {
 
 	It("Should properly replace DVTemplates", func() {
 		vm := createVMWithDVTemplateAndPVC()
-		res, err := controller.updateHttpSourceDataVolumeTemplate(vm)
+		res, err := updateHttpSourceDataVolumeTemplate(vm)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(res).ToNot(BeNil())
 		Expect(res.Spec.DataVolumeTemplates).To(HaveLen(1))
@@ -2526,3 +2797,25 @@ func enableOCIExportFeatureGate(kvStore cache.Store) {
 		},
 	})
 }
+
+var _ = Describe("getDeadlineValue", func() {
+	oldExport := func() *exportv1.VirtualMachineExport {
+		return &exportv1.VirtualMachineExport{
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(time.Now().Add(-3 * time.Hour))},
+		}
+	}
+
+	It("falls back to the default TTL for a pull source, even if that's already past", func() {
+		deadline := getDeadlineValue(24*time.Hour, oldExport())
+		Expect(deadline).To(BeTemporally("<", time.Now()))
+	})
+
+	It("emits a cert-rotation deadline for a pull source", func() {
+		Expect(deadlineEnvValue(24*time.Hour, oldExport(), nil)).ToNot(BeEmpty())
+	})
+
+	It("emits no deadline for an offline push source, so a long convert runs to completion", func() {
+		source := NewOfflineVMBackupSource(&backupv1.VirtualMachineBackup{}, "testvm", nil, nil, nil, "", false, nil)
+		Expect(deadlineEnvValue(24*time.Hour, oldExport(), source)).To(BeEmpty())
+	})
+})

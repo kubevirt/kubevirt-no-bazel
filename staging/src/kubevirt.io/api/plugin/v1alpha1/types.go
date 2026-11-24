@@ -51,17 +51,18 @@ type PluginList struct {
 
 type PluginSpec struct {
 	// Condition is a CEL expression that determines whether this plugin applies to a given VM.
+	// The expression may reference only `vmi` and must evaluate to a bool.
 	// When set, this acts as a baseline filter for all hooks in the plugin.
 	// Individual hooks may further narrow the scope with their own Condition fields.
-	// Condition expressions are evaluated once per pipeline invocation, against the VMI/domain
-	// state as it existed before any hook in that invocation ran. They are not re-evaluated to
-	// reflect mutations made by other hooks applied earlier in the same invocation.
+	// An empty condition always matches.
 	// +optional
 	Condition string `json:"condition,omitempty"`
 
-	// FailureStrategy specifies the default behavior when the plugin itself is unhealthy
-	// (e.g. a referenced webhook is not ready, or a sidecar socket is unreachable).
+	// FailureStrategy specifies the default behavior when one of the plugin's launcher or node hooks fails
+	// (e.g. its socket is unreachable, the call times out, or the hook returns an error).
 	// Individual hooks may override this with their own FailureStrategy.
+	// Defaults to Fail.
+	// Errors evaluating a plugin or hook Condition always fail the operation, regardless of FailureStrategy.
 	// +optional
 	FailureStrategy FailureStrategy `json:"failureStrategy,omitempty"`
 
@@ -102,7 +103,7 @@ type PluginSpec struct {
 	ValidatingAdmissionWebhooks []AdmissionReference `json:"validatingAdmissionWebhooks,omitempty"`
 }
 
-// FailureStrategy specifies how hook failures are handled. Defaults to Fail if not specified.
+// FailureStrategy specifies how hook failures are handled. An unset hook-level value falls back to the plugin-level value; Fail if neither is set.
 // +enum
 // +kubebuilder:validation:XValidation:rule="self in ['Fail','Ignore']",message="failureStrategy must be one of: Fail, Ignore"
 type FailureStrategy string
@@ -134,9 +135,11 @@ type LauncherHook struct {
 	// +optional
 	Sidecar *SidecarLauncherHook `json:"sidecar,omitempty"`
 	// Condition is a CEL expression that determines whether this hook applies to a given VM.
+	// The expression may reference only `vmi` and must evaluate to a bool.
 	// +optional
 	Condition string `json:"condition,omitempty"`
-	// FailureStrategy specifies how to handle hook failures (Fail or Ignore).
+	// FailureStrategy specifies how to handle failures of this hook (Fail or Ignore).
+	// Defaults to the plugin-level FailureStrategy, or Fail if neither is set.
 	// +optional
 	FailureStrategy FailureStrategy `json:"failureStrategy,omitempty"`
 	// Timeout specifies the maximum duration to wait for the hook to complete.
@@ -145,18 +148,21 @@ type LauncherHook struct {
 }
 
 // LauncherHookPoint identifies a point in the VM lifecycle where a launcher hook can run.
-// Only hook points implemented by virt-launcher are accepted.
+// GuestDefinition accepts CEL and sidecar hooks; PreBoot and PreMigrationSource are sidecar-only.
 // +enum
-// +kubebuilder:validation:XValidation:rule="self == 'GuestDefinition'",message="hook point must be GuestDefinition"
+// +kubebuilder:validation:XValidation:rule="self in ['GuestDefinition','PreBoot','PreMigrationSource']",message="hook point must be one of: GuestDefinition, PreBoot, PreMigrationSource"
 type LauncherHookPoint string
 
 const (
-	LauncherHookGuestDefinition LauncherHookPoint = "GuestDefinition"
+	LauncherHookGuestDefinition    LauncherHookPoint = "GuestDefinition"
+	LauncherHookPreBoot            LauncherHookPoint = "PreBoot"
+	LauncherHookPreMigrationSource LauncherHookPoint = "PreMigrationSource"
 )
 
 type CELLauncherHook struct {
 	// HookPoint specifies which launcher hook point this CEL expression applies to.
 	// GuestDefinition is the only currently supported launcher hook point for CEL.
+	// +kubebuilder:validation:XValidation:rule="self == 'GuestDefinition'",message="CEL is only supported for the GuestDefinition hook point"
 	HookPoint LauncherHookPoint `json:"hookPoint"`
 	// Expression is the CEL expression applied at the specified hook point.
 	// +kubebuilder:validation:MinLength=1
@@ -201,9 +207,11 @@ type NodeHook struct {
 	// +listType=atomic
 	PermittedHooks []NodeHookPoint `json:"permittedHooks"`
 	// Condition is a CEL expression that determines whether this hook applies to a given VM.
+	// The expression may reference only `vmi` and must evaluate to a bool.
 	// +optional
 	Condition string `json:"condition,omitempty"`
-	// FailureStrategy specifies how to handle hook failures (Fail or Ignore).
+	// FailureStrategy specifies how to handle failures of this hook (Fail or Ignore).
+	// Defaults to the plugin-level FailureStrategy, or Fail if neither is set.
 	// +optional
 	FailureStrategy FailureStrategy `json:"failureStrategy,omitempty"`
 	// Timeout specifies the maximum duration to wait for the hook to complete.

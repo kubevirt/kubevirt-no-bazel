@@ -108,6 +108,9 @@ go-test-cache-save:
 
 test: bazel-test
 
+test-integration:
+	hack/dockerized "go test -race ./tests/integration/... -count=1 -v"
+
 fuzz:
 	hack/dockerized "./hack/fuzz.sh"
 
@@ -117,7 +120,7 @@ integ-test:
 functest: build-functests
 	hack/functests.sh
 
-dump: go-build-functests
+dump:
 	hack/dump.sh
 
 functest-image-build: manifests build-functests
@@ -234,6 +237,9 @@ olm-push:
 	hack/dockerized "DOCKER_TAG=${DOCKER_TAG} CSV_VERSION=${CSV_VERSION} QUAY_USERNAME=${QUAY_USERNAME} \
 	    QUAY_PASSWORD=${QUAY_PASSWORD} QUAY_REPOSITORY=${QUAY_REPOSITORY} PACKAGE_NAME=${PACKAGE_NAME} ./hack/olm.sh push"
 
+bump-apitesting:
+	./hack/bump-apitesting.sh
+
 bump-kubevirtci:
 	./hack/bump-kubevirtci.sh
 
@@ -250,7 +256,7 @@ lint:
 	hack/dockerized "hack/lint-newcirros-deprecation.sh"
 	hack/dockerized "hack/golangci-lint.sh"
 	hack/dockerized "monitoringlinter ./pkg/..."
-	hack/dockerized "hack/license-header-check.sh"
+	hack/dockerized "hack/license-header/license-header-check.sh"
 	hack/dockerized "hack/go-fix.sh --diff"
 
 lint-metrics:
@@ -276,6 +282,9 @@ vmlog-checker:
 	@CGO_ENABLED=0 go build -o tools/vmlog-checker/vmlog-checker tools/vmlog-checker/main.go
 	@echo "Built successfully: tools/vmlog-checker/vmlog-checker"
 	@echo "Usage: ./tools/vmlog-checker/vmlog-checker --log <file> [options]"
+
+rpm-mirror-checker:
+	hack/dockerized "go run ./hack/rpm-mirror-checker/rpm-mirror-checker.go"
 
 .PHONY: \
 	build-verify \
@@ -323,6 +332,9 @@ vmlog-checker:
 	rpm-deps-cs9 \
 	rpm-deps-cs10 \
 	rpm-deps-all \
+	bump-apitesting \
 	feature-gate-report \
 	vmlog-checker \
+	test-integration \
+	rpm-mirror-checker \
 	$(NULL)

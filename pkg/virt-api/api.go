@@ -49,7 +49,7 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/util/ratelimiter"
 
-	backupv1 "kubevirt.io/api/backup/v1alpha1"
+	backupv1 "kubevirt.io/api/backup/v1beta1"
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 	"kubevirt.io/client-go/log"
@@ -107,13 +107,13 @@ type VirtApi interface {
 
 type virtAPIApp struct {
 	service.ServiceListen
-	SubresourcesOnly bool
-	virtClient       kubecli.KubevirtClient
-	k8sClient        kubernetes.Interface
-	aggregatorClient *aggregatorclient.Clientset
-	authorizor       rest.VirtApiAuthorizor
-	certsDirectory   string
-	clusterConfig    *virtconfig.ClusterConfig
+	SubresourcesOnly   bool
+	virtClient         kubecli.KubevirtClient
+	k8sClient          kubernetes.Interface
+	launcherPodIndexer cache.Indexer
+	aggregatorClient   *aggregatorclient.Clientset
+	authorizor         rest.VirtApiAuthorizor
+	clusterConfig      *virtconfig.ClusterConfig
 
 	namespace               string
 	host                    string
@@ -186,10 +186,6 @@ func (app *virtAPIApp) Execute() {
 
 	app.authorizor = authorizor
 
-	app.certsDirectory, err = os.MkdirTemp("", "certsdir")
-	if err != nil {
-		panic(err)
-	}
 	app.namespace, err = clientutil.GetNamespace()
 	if err != nil {
 		panic(err)
@@ -237,7 +233,7 @@ func (app *virtAPIApp) composeSubresources() {
 		subws.Doc(fmt.Sprintf("KubeVirt \"%s\" Subresource API.", version.Version))
 		subws.Path(definitions.GroupVersionBasePath(version))
 
-		subresourceApp := rest.NewSubresourceAPIApp(app.virtClient, app.k8sClient, app.consoleServerPort, app.handlerTLSConfiguration, app.clusterConfig)
+		subresourceApp := rest.NewSubresourceAPIApp(app.virtClient, app.k8sClient, app.launcherPodIndexer, app.consoleServerPort, app.handlerTLSConfiguration, app.clusterConfig)
 
 		restartRouteBuilder := subws.PUT(definitions.NamespacedResourcePath(subresourcesvmGVR)+definitions.SubResourcePath("restart")).
 			To(subresourceApp.RestartVMRequestHandler).
@@ -642,16 +638,29 @@ func (app *virtAPIApp) composeSubresources() {
 			Returns(http.StatusNotFound, httpStatusNotFoundMessage, "").
 			Returns(http.StatusBadRequest, httpStatusBadRequestMessage, ""))
 
-		subws.Route(subws.PUT(definitions.NamespacedResourcePath(subresourcesvmiGVR)+definitions.SubResourcePath("redefine-checkpoint")).
-			To(subresourceApp.RedefineCheckpointVMIRequestHandler).
+		subws.Route(subws.PUT(definitions.NamespacedResourcePath(subresourcesvmiGVR)+definitions.SubResourcePath("externalsnapshot")).
+			To(subresourceApp.ExternalSnapshotVMIRequestHandler).
 			Consumes(mime.MIME_ANY).
-			Reads(backupv1.BackupCheckpoint{}).
+			Reads(v1.SnapshotOverlayOptions{}).
 			Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).
-			Operation(version.Version+"RedefineCheckpoint").
-			Doc("Redefine a checkpoint for a VirtualMachineInstance.").
+			Operation(version.Version+"ExternalSnapshot").
+			Doc("Redirect the disks of a VirtualMachineInstance to copy-on-write overlays.").
 			Returns(http.StatusOK, "OK", "").
 			Returns(http.StatusNotFound, httpStatusNotFoundMessage, "").
-			Returns(http.StatusBadRequest, httpStatusBadRequestMessage, ""))
+			Returns(http.StatusBadRequest, httpStatusBadRequestMessage, "").
+			Returns(http.StatusInternalServerError, httpStatusInternalServerError, ""))
+
+		subws.Route(subws.PUT(definitions.NamespacedResourcePath(subresourcesvmiGVR)+definitions.SubResourcePath("commitsnapshot")).
+			To(subresourceApp.CommitSnapshotVMIRequestHandler).
+			Consumes(mime.MIME_ANY).
+			Reads(v1.SnapshotOverlayOptions{}).
+			Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).
+			Operation(version.Version+"CommitSnapshot").
+			Doc("Commit the copy-on-write overlays of a VirtualMachineInstance back into their base images.").
+			Returns(http.StatusOK, "OK", "").
+			Returns(http.StatusNotFound, httpStatusNotFoundMessage, "").
+			Returns(http.StatusBadRequest, httpStatusBadRequestMessage, "").
+			Returns(http.StatusInternalServerError, httpStatusInternalServerError, ""))
 
 		// Return empty api resource list.
 		// K8s expects to be able to retrieve a resource list for each aggregated
@@ -692,7 +701,11 @@ func (app *virtAPIApp) composeSubresources() {
 						Namespaced: true,
 					},
 					{
-						Name:       "virtualmachineinstances/redefine-checkpoint",
+						Name:       "virtualmachineinstances/externalsnapshot",
+						Namespaced: true,
+					},
+					{
+						Name:       "virtualmachineinstances/commitsnapshot",
 						Namespaced: true,
 					},
 					{
@@ -1216,6 +1229,8 @@ func (app *virtAPIApp) Run() {
 	vmRestoreInformer := kubeInformerFactory.VirtualMachineRestore()
 	vmBackupInformer := kubeInformerFactory.VirtualMachineBackup()
 	namespaceInformer := kubeInformerFactory.Namespace()
+	// The port-forward subresource resolves the virt-launcher pod IP from this informer.
+	app.launcherPodIndexer = kubeInformerFactory.KubeVirtPod().GetIndexer()
 
 	stopChan := make(chan struct{}, 1)
 	defer close(stopChan)

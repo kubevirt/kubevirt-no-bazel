@@ -438,6 +438,11 @@ func getKubeVirtComponentsClusterRules() []rbacv1.PolicyRule {
 			Resources: []string{"network-attachment-definitions"},
 			Verbs:     []string{"get"},
 		},
+		{
+			APIGroups: []string{"subresources.kubevirt.io"},
+			Resources: []string{"virtualmachineinstances/redefine-checkpoint"},
+			Verbs:     []string{"update"},
+		},
 	}
 	rules = append(rules, backwardsCompatRules...)
 
@@ -575,7 +580,8 @@ func NewOperatorRole(namespace string) *rbacv1.Role {
 				ResourceNames: []string{
 					components.KubeVirtCASecretName,
 					components.KubeVirtExportCASecretName,
-					components.KubeVirtBackupCASecretName,
+					// TODO drop "kubevirt-backup-ca" after v1.10, once the previous release no longer ships it
+					"kubevirt-backup-ca",
 					components.VirtHandlerCertSecretName,
 					components.VirtHandlerServerCertSecretName,
 					components.VirtHandlerMigrationClientCertSecretName,
@@ -652,6 +658,37 @@ func NewOperatorRole(namespace string) *rbacv1.Role {
 				},
 				Verbs: []string{
 					"get", "list", "watch", "delete", "update", "create", "patch",
+				},
+			},
+			{
+				APIGroups: []string{
+					"autoscaling",
+				},
+				Resources: []string{
+					"horizontalpodautoscalers",
+				},
+				Verbs: []string{
+					"get",
+					"list",
+					"watch",
+					"create",
+					"delete",
+					"patch",
+				},
+			},
+			{
+				// Probe custom.metrics.k8s.io when auto-detecting the virt-exportproxy HPA metrics profile.
+				// Resources must be "*" because prometheus-adapter exposes each metric as a dynamic
+				// custom.metrics.k8s.io resource name that cannot be enumerated at RBAC definition time.
+				APIGroups: []string{
+					"custom.metrics.k8s.io",
+				},
+				Resources: []string{
+					"*",
+				},
+				Verbs: []string{
+					"get",
+					"list",
 				},
 			},
 		},

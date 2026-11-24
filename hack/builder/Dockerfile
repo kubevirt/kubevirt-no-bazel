@@ -6,10 +6,10 @@ ARG BAZEL_ARCH
 ARG ENVTEST_K8S_VERSION=1.37.0
 ARG SETUP_ENVTEST_VERSION=v0.24.1
 
-ENV BAZEL_VERSION=7.5.0
-# Keep in sync with the bazeldnf http_archive in WORKSPACE (hack/verify-rpm-deps.sh checks this).
-ENV BAZELDNF_VERSION=v0.5.9-2
-ENV GIMME_GO_VERSION=1.26.6
+ENV BAZEL_VERSION=9.3.1
+# Keep in sync with the bazeldnf version in MODULE.bazel (hack/verify-rpm-deps.sh checks this).
+ENV BAZELDNF_VERSION=v0.99.2-rc2
+ENV GIMME_GO_VERSION=1.26.10
 ENV OPERATOR_COURIER_VERSION=2.1.11
 ENV SONOBUOY_VERSION=0.56.9
 ENV GOLANGCI_LINT_VERSION=v2.12.2
@@ -149,12 +149,12 @@ RUN if test "${ARCH}" != "s390x"; then \
 
 # Standalone bazeldnf for hack/rpm-deps.sh and hack/verify-rpm-deps.sh
 RUN case "${ARCH}" in \
-        amd64) sha256=e78b730e5f9d1edeb7b54e7414e8c094820056eb838f58a235763b63df3f5c41 ;; \
-        arm64) sha256=46d98eefc3bb09b5559140b8c65a128742d6ec0bddc3d4f8851b8eee5de9b660 ;; \
-        s390x) sha256=6ab0e13093d6dfbf5234cd935c24615de4658b17afc787542e62f8eaf5e3ccc7 ;; \
+        amd64) sha256=ad92813fec7c8e71682b16966b22ee32f5a7f45edd983a7e2794d14031e154bc ;; \
+        arm64) sha256=0101691c1b2e33fd690b1466379919de157d7d11f079317430cfc850d72440af ;; \
+        s390x) sha256=1492c6d2276490ecfac7a73793646f9c0b7f26ff8034ee86a4d40128309144b3 ;; \
         *) echo "no bazeldnf binary for ${ARCH}" >&2; exit 1 ;; \
     esac && \
-    curl -sSfL -o /usr/bin/bazeldnf https://github.com/brianmcarey/bazeldnf/releases/download/${BAZELDNF_VERSION}/bazeldnf-${BAZELDNF_VERSION}-linux-${ARCH} && \
+    curl -sSfL -o /usr/bin/bazeldnf https://github.com/rmohr/bazeldnf/releases/download/${BAZELDNF_VERSION}/bazeldnf-${BAZELDNF_VERSION}-linux-${ARCH} && \
     echo "${sha256}  /usr/bin/bazeldnf" | sha256sum -c - && \
     chmod +x /usr/bin/bazeldnf
 

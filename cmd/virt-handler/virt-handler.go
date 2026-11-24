@@ -39,6 +39,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/checkpoint"
 	netresources "kubevirt.io/kubevirt/pkg/network/resources"
 	"kubevirt.io/kubevirt/pkg/virt-handler/ksm"
+	notifymanager "kubevirt.io/kubevirt/pkg/virt-handler/notify-manager"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -200,7 +201,7 @@ func (app *virtHandlerApp) prepareCertManager() (err error) {
 }
 
 func (app *virtHandlerApp) markNodeAsUnschedulable(logger *log.FilteredLogger) {
-	data := []byte(fmt.Sprintf(`{"metadata": { "labels": {"%s": "false"}}}`, v1.NodeSchedulable))
+	data := fmt.Appendf(nil, `{"metadata": { "labels": {"%s": "false"}}}`, v1.NodeSchedulable)
 	_, err := app.k8sClient.CoreV1().Nodes().Patch(context.Background(), app.HostOverride, types.StrategicMergePatchType, data, metav1.PatchOptions{})
 	if err != nil {
 		logger.Reason(err).Error("Unable to mark node as unschedulable")
@@ -272,11 +273,7 @@ func (app *virtHandlerApp) Run() {
 	vmiInformer := factory.VMI()
 	vmiSourceInformer := factory.VMISourceHost(app.HostOverride)
 	vmiTargetInformer := factory.VMITargetHost(app.HostOverride)
-	backupTrackerInformer := factory.VirtualMachineBackupTracker()
 	pluginInformer := factory.Plugin()
-
-	// Wire Domain controller
-	domainSharedInformer := virtcache.NewSharedInformer(app.VirtShareDir, int(app.WatchdogTimeoutDuration.Seconds()), recorder, vmiInformer.GetStore(), time.Duration(app.domainResyncPeriodSeconds)*time.Second)
 
 	checkpointPath := filepath.Join(app.VirtPrivateDir, "ghost-records")
 	checkpointPathTmp := filepath.Join(app.VirtPrivateDir, "ghost-records-temp")
@@ -292,7 +289,10 @@ func (app *virtHandlerApp) Run() {
 	// We keep a record on disk of every VMI virt-handler starts.
 	// That record isn't deleted from this node until the VMI
 	// is completely torn down.
-	_ = virtcache.InitializeGhostRecordCache(virtcache.NewIterableCheckpointManager(checkpointPath, checkpointPathTmp))
+	ghostRecordStore := virtcache.InitializeGhostRecordCache(virtcache.NewIterableCheckpointManager(checkpointPath, checkpointPathTmp))
+
+	// Wire Domain controller
+	domainSharedInformer := virtcache.NewSharedInformer(app.VirtShareDir, int(app.WatchdogTimeoutDuration.Seconds()), recorder, vmiInformer.GetStore(), time.Duration(app.domainResyncPeriodSeconds)*time.Second, ghostRecordStore)
 
 	cmdclient.SetPodsBaseDir("/pods")
 	containerdisk.SetKubeletPodsDirectory(app.KubeletPodsDir)
@@ -379,18 +379,13 @@ func (app *virtHandlerApp) Run() {
 		go nodeLabellerController.Run(stop)
 	}
 
-	migrationIpAddress := app.PodIpAddress
-	migrationIpAddress, err = virthandler.FindMigrationIP(migrationIpAddress)
-	if err != nil {
-		panic(err)
-	}
-
 	downwardMetricsManager := dmetricsmanager.NewDownwardMetricsManager(app.HostOverride)
 
-	launcherClientsManager := launcherclients.NewLauncherClientsManager(app.VirtShareDir, podIsolationDetector)
+	notifyManager := notifymanager.NewPipeManager(podIsolationDetector, app.VirtShareDir)
+	launcherClientsManager := launcherclients.NewLauncherClientsManager(podIsolationDetector, notifyManager, ghostRecordStore)
 
 	netConf := netsetup.NewNetConf(app.clusterConfig)
-	netStat := netsetup.NewNetStat()
+	netStat := netsetup.NewNetStat(app.clusterConfig)
 	passtRepairHandler := passt.NewRepairManager()
 
 	// Bootstrapping. From here on the startup order matters
@@ -407,11 +402,17 @@ func (app *virtHandlerApp) Run() {
 		factory.CRD().HasSynced,
 		factory.KubeVirt().HasSynced,
 		nodeInformer.HasSynced,
-		backupTrackerInformer.HasSynced,
 		pluginInformer.HasSynced,
 	)
 
 	nodeHookManager, err := virthandlerplugins.NewNodeHookManager(pluginInformer.GetStore(), app.clusterConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	// Resolve migration IP after cache sync so GetMigrationConfiguration has the actual KubeVirt CR
+	allowFallback := virthandler.IsMigrationNetworkFallbackAllowed(app.clusterConfig.GetMigrationConfiguration())
+	migrationIpAddress, err := virthandler.FindMigrationIP(app.PodIpAddress, allowFallback)
 	if err != nil {
 		panic(err)
 	}
@@ -491,7 +492,7 @@ func (app *virtHandlerApp) Run() {
 		panic(err)
 	}
 
-	cbtHandler := virthandler.NewCBTHandler(app.virtClient, backupTrackerInformer)
+	cbtHandler := virthandler.NewCBTHandler()
 
 	vmController, err := virthandler.NewVirtualMachineController(
 		workqueue.NewTypedRateLimitingQueueWithConfig(
@@ -522,6 +523,7 @@ func (app *virtHandlerApp) Run() {
 		nodeHookManager,
 		cdMounter,
 		hvMounter,
+		ghostRecordStore,
 	)
 	if err != nil {
 		panic(err)
@@ -728,11 +730,12 @@ func (app *virtHandlerApp) runServer(errCh chan error, consoleHandler *rest.Cons
 	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/vnc/screenshot").To(lifecycleHandler.ScreenshotRequestHandler))
 	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/usbredir").To(consoleHandler.USBRedirHandler))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/backup").To(lifecycleHandler.BackupHandler))
-	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/redefine-checkpoint").To(lifecycleHandler.RedefineCheckpointHandler))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/pause").To(lifecycleHandler.PauseHandler))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/unpause").To(lifecycleHandler.UnpauseHandler))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/freeze").To(lifecycleHandler.FreezeHandler).Reads(v1.FreezeUnfreezeTimeout{}))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/unfreeze").To(lifecycleHandler.UnfreezeHandler))
+	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/externalsnapshot").To(lifecycleHandler.ExternalSnapshotHandler).Reads(v1.SnapshotOverlayOptions{}))
+	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/commitsnapshot").To(lifecycleHandler.CommitSnapshotHandler).Reads(v1.SnapshotOverlayOptions{}))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/softreboot").To(lifecycleHandler.SoftRebootHandler))
 	ws.Route(ws.PUT("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/reset").To(lifecycleHandler.ResetHandler))
 	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/guestosinfo").To(lifecycleHandler.GetGuestInfo).Produces(restful.MIME_JSON).Consumes(restful.MIME_JSON).Returns(http.StatusOK, "OK", v1.VirtualMachineInstanceGuestAgentInfo{}))
