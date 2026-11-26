@@ -58,17 +58,17 @@ if [ -z "${BUILDER_IMAGE}" ]; then
     fi
 fi
 
-# Print the digest of the pull() rule named $1 in WORKSPACE. The Bazel build
-# pins these images there and the bump scripts update them, so read them
-# instead of keeping copies here.
-workspace_digest() {
+# Print the digest of the pull() rule named $1 in MODULE.bazel. The Bazel
+# build pins these images there and the bump scripts update them, so read
+# them instead of keeping copies here.
+module_digest() {
     local digest
     digest=$(awk -v name="\"$1\"," '
         $1 == "name" && $3 == name { found = 1 }
         found && $1 == "digest" { gsub(/[",]/, "", $3); print $3; exit }
-    ' WORKSPACE)
+    ' MODULE.bazel)
     if [[ -z "${digest}" ]]; then
-        echo "ERROR: no digest for $1 in WORKSPACE" >&2
+        echo "ERROR: no digest for $1 in MODULE.bazel" >&2
         return 1
     fi
     echo "${digest}"
@@ -89,15 +89,15 @@ virt_template_digest() {
 # Distroless base image and Alpine ISO per architecture, as in the Bazel build
 case ${PLATFORM_ARCH} in
 amd64)
-    DISTROLESS_DIGEST=$(workspace_digest go_image_base)
+    DISTROLESS_DIGEST=$(module_digest go_image_base)
     ALPINE_ISO_ENTRY=alpine_image
     ;;
 arm64)
-    DISTROLESS_DIGEST=$(workspace_digest go_image_base_aarch64)
+    DISTROLESS_DIGEST=$(module_digest go_image_base_aarch64)
     ALPINE_ISO_ENTRY=alpine_image_aarch64
     ;;
 s390x)
-    DISTROLESS_DIGEST=$(workspace_digest go_image_base_s390x)
+    DISTROLESS_DIGEST=$(module_digest go_image_base_s390x)
     ALPINE_ISO_ENTRY=alpine_image_s390x
     ;;
 *)
@@ -109,7 +109,7 @@ esac
 DISTROLESS_BASE_IMAGE="gcr.io/distroless/base-debian12@${DISTROLESS_DIGEST}"
 
 # Base image of the passt binding CNI plugin, as in the Bazel build
-BUSYBOX_IMAGE="registry.k8s.io/busybox@$(workspace_digest busybox)"
+BUSYBOX_IMAGE="registry.k8s.io/busybox@$(module_digest busybox)"
 
 kubevirt::version::get_version_vars
 KUBEVIRT_VERSION=${KUBEVIRT_GIT_VERSION:-"devel"}
@@ -229,9 +229,9 @@ retag_single_image() {
     fedora-with-test-tooling-container-disk)
         local normalized_arch=$(format_archname ${BUILD_ARCH} tag)
         case ${normalized_arch} in
-        amd64) DIGEST=$(workspace_digest fedora_with_test_tooling) ;;
-        arm64) DIGEST=$(workspace_digest fedora_with_test_tooling_aarch64) ;;
-        s390x) DIGEST=$(workspace_digest fedora_with_test_tooling_s390x) ;;
+        amd64) DIGEST=$(module_digest fedora_with_test_tooling) ;;
+        arm64) DIGEST=$(module_digest fedora_with_test_tooling_aarch64) ;;
+        s390x) DIGEST=$(module_digest fedora_with_test_tooling_s390x) ;;
         *)
             echo "ERROR: Unsupported architecture ${normalized_arch} for fedora-with-test-tooling"
             exit 1
@@ -242,9 +242,9 @@ retag_single_image() {
     alpine-with-test-tooling-container-disk)
         local normalized_arch=$(format_archname ${BUILD_ARCH} tag)
         case ${normalized_arch} in
-        amd64) DIGEST=$(workspace_digest alpine_with_test_tooling) ;;
-        arm64) DIGEST=$(workspace_digest alpine_with_test_tooling_arm64) ;;
-        s390x) DIGEST=$(workspace_digest alpine_with_test_tooling_s390x) ;;
+        amd64) DIGEST=$(module_digest alpine_with_test_tooling) ;;
+        arm64) DIGEST=$(module_digest alpine_with_test_tooling_arm64) ;;
+        s390x) DIGEST=$(module_digest alpine_with_test_tooling_s390x) ;;
         *)
             echo "ERROR: Unsupported architecture ${normalized_arch} for alpine-with-test-tooling"
             exit 1
@@ -253,13 +253,13 @@ retag_single_image() {
         SOURCE_IMAGE="quay.io/kubevirtci/alpine-with-test-tooling-container-disk@${DIGEST}"
         ;;
     fedora-realtime-container-disk)
-        SOURCE_IMAGE="quay.io/kubevirt/fedora-realtime-container-disk@$(workspace_digest fedora_realtime)"
+        SOURCE_IMAGE="quay.io/kubevirt/fedora-realtime-container-disk@$(module_digest fedora_realtime)"
         ;;
     alpine-ext-kernel-boot-demo)
-        SOURCE_IMAGE="quay.io/kubevirt/alpine-ext-kernel-boot-demo@$(workspace_digest alpine-ext-kernel-boot-demo-container-base)"
+        SOURCE_IMAGE="quay.io/kubevirt/alpine-ext-kernel-boot-demo@$(module_digest alpine-ext-kernel-boot-demo-container-base)"
         ;;
     s390x-guestless-kernel)
-        SOURCE_IMAGE="quay.io/kubevirt/s390x-guestless-kernel@$(workspace_digest s390x-guestless-kernel)"
+        SOURCE_IMAGE="quay.io/kubevirt/s390x-guestless-kernel@$(module_digest s390x-guestless-kernel)"
         ;;
     virt-template-apiserver)
         local normalized_arch=$(format_archname ${BUILD_ARCH} tag)
