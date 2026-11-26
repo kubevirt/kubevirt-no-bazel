@@ -22,19 +22,13 @@ set -ex
 source hack/common.sh
 source hack/config.sh
 
-# Bazel runs in the builder container. The binary runs on the host, where the
-# cluster kubeconfig is available. Set ARTIFACTS only after this call:
-# hack/dockerized rejects a relative ARTIFACTS path.
+# Go builds dump in the builder container, for the host's architecture. The
+# binary runs on the host, where the cluster kubeconfig is available. Set
+# ARTIFACTS only after this call: hack/dockerized rejects a relative ARTIFACTS
+# path.
 hack/dockerized 'source hack/common.sh &&
-    source hack/bootstrap.sh &&
-    source hack/config.sh &&
     mkdir -p "${CMD_OUT_DIR}/dump" &&
-    bazel build \
-        --config="${HOST_ARCHITECTURE}" "${BAZEL_CS_CONFIG}" \
-        //cmd/dump:dump &&
-    bazel run \
-        --config="${HOST_ARCHITECTURE}" "${BAZEL_CS_CONFIG}" \
-        :build-dump -- "${CMD_OUT_DIR}/dump/dump"'
+    go_build -tags "${KUBEVIRT_GO_BUILD_TAGS}" -o "${CMD_OUT_DIR}/dump/dump" ./cmd/dump'
 
 export ARTIFACTS=${ARTIFACTS:-_out/artifacts}
 
