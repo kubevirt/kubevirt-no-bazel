@@ -79,7 +79,7 @@ compute_tars_for_image() {
         trees+=" passt_tree"
     fi
     if [[ "${image}" == "libvirt-devel" ]]; then
-        # cross-linking virt-launcher also needs the libnbd headers/libs
+        # cross-linking virt-exportserver also needs the libnbd headers/libs
         trees+=" libnbd-devel"
     fi
 
