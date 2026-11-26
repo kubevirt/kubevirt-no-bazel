@@ -85,7 +85,7 @@ echo "Building and pushing images to cluster registry"
 ${KUBEVIRT_PATH}hack/push-images-container.sh
 
 # Build and push cross-arch container disk images for cross-architecture emulation testing
-if [ "${KUBEVIRT_CROSS_ARCH_EMULATION:-}" ]; then
+if [ "${KUBEVIRT_CROSS_ARCH_EMULATION}" ]; then
     cross_arch_targets="fedora-with-test-tooling-container-disk alpine-with-test-tooling-container-disk"
     host_arch=$(uname -m)
     cross_arch=""
@@ -111,8 +111,9 @@ if [ "${KUBEVIRT_CROSS_ARCH_EMULATION:-}" ]; then
 fi
 
 # The images that the operator deploys, for the custom image tag and prefix
-# tests in tests/operator
-alt_targets="virt-operator virt-api virt-controller virt-handler virt-launcher virt-exportserver virt-exportproxy virt-synchronization-controller"
+# tests in tests/operator. Lanes narrow them with PUSH_TARGETS_ALT or
+# PUSH_TARGETS, like hack/bazel-push-images.sh.
+alt_targets=${PUSH_TARGETS_ALT-${PUSH_TARGETS:-virt-operator virt-api virt-controller virt-handler virt-launcher virt-exportserver virt-exportproxy virt-synchronization-controller}}
 
 # Push a built image again under another name
 tag_and_push() {

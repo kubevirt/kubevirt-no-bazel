@@ -24,7 +24,7 @@
 set -e
 
 DOCKER_TAG=${DOCKER_TAG:-devel}
-DOCKER_TAG_ALT=${DOCKER_TAG_ALT:-devel_alt}
+DOCKER_TAG_ALT=${DOCKER_TAG_ALT-devel_alt}
 
 source hack/common.sh
 source kubevirtci/cluster-up/cluster/$KUBEVIRT_PROVIDER/provider.sh
@@ -34,11 +34,14 @@ echo "Building (Bazel) ..."
 
 # Build everything and publish it
 ${KUBEVIRT_PATH}hack/dockerized "BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} KUBEVIRT_PROVIDER=${KUBEVIRT_PROVIDER} ./hack/bazel-build-functests.sh"
-${KUBEVIRT_PATH}hack/dockerized "BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} DOCKER_TAG_ALT=${DOCKER_TAG_ALT} KUBEVIRT_PROVIDER=${KUBEVIRT_PROVIDER} IMAGE_PREFIX=${IMAGE_PREFIX} IMAGE_PREFIX_ALT=${IMAGE_PREFIX_ALT} ./hack/multi-arch.sh hack/bazel-push-images.sh"
+push_target_env=""
+[[ -n ${PUSH_TARGETS:-} ]] && push_target_env+=" PUSH_TARGETS='${PUSH_TARGETS}'"
+[[ -v PUSH_TARGETS_ALT ]] && push_target_env+=" PUSH_TARGETS_ALT='${PUSH_TARGETS_ALT}'"
+${KUBEVIRT_PATH}hack/dockerized "BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} DOCKER_TAG_ALT=${DOCKER_TAG_ALT} KUBEVIRT_PROVIDER=${KUBEVIRT_PROVIDER} IMAGE_PREFIX=${IMAGE_PREFIX} IMAGE_PREFIX_ALT=${IMAGE_PREFIX_ALT}${push_target_env} ./hack/multi-arch.sh hack/bazel-push-images.sh"
 BUILD_ARCH=${BUILD_ARCH} DOCKER_PREFIX=${DOCKER_PREFIX} DOCKER_TAG=${DOCKER_TAG} hack/push-container-manifest.sh
 
 # Build and push cross-arch container disk images for cross-architecture emulation testing
-if [ "${KUBEVIRT_CROSS_ARCH_EMULATION:-}" ]; then
+if [ "${KUBEVIRT_CROSS_ARCH_EMULATION}" ]; then
     cross_arch_targets="fedora-with-test-tooling-container-disk alpine-with-test-tooling-container-disk"
     host_arch=$(uname -m)
     case ${host_arch} in
