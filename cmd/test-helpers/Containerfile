@@ -16,12 +16,14 @@
 # Copyright The KubeVirt Authors.
 #
 
-# hack/build-image-binaries.sh compiles the programs into _out/cmd/.
-FROM scratch
+# hack/build-image-binaries.sh compiles the programs into _out/cmd/, and
+# hack/build-images-container.sh sets the image build arguments.
+ARG TEST_HELPERS_BASE_IMAGE
+
+FROM ${TEST_HELPERS_BASE_IMAGE}
 
 COPY _out/cmd/pod-mutator/pod-mutator /usr/bin/test-pod-mutator
-
-COPY --chmod=0644 .passwd /etc/passwd
+COPY _out/cmd/dra-network-test-driver/dra-network-test-driver /usr/bin/dra-network-test-driver
 
 USER 1001
 

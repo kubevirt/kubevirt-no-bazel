@@ -140,6 +140,7 @@ LIBGUESTFS_BASE_IMAGE=${LIBGUESTFS_BASE_IMAGE:-$(base_image libguestfs-tools-bas
 PR_HELPER_BASE_IMAGE=${PR_HELPER_BASE_IMAGE:-$(base_image pr-helper-base)}
 SIDECAR_SHIM_BASE_IMAGE=${SIDECAR_SHIM_BASE_IMAGE:-$(base_image sidecar-shim-base)}
 TESTIMAGE_BASE_IMAGE=${TESTIMAGE_BASE_IMAGE:-$(base_image testimage)}
+TEST_HELPERS_BASE_IMAGE=${TEST_HELPERS_BASE_IMAGE:-$(base_image test-helpers-base)}
 
 BUILD_ARGS="--build-arg DISTROLESS_BASE_IMAGE=${DISTROLESS_BASE_IMAGE}"
 
@@ -173,7 +174,7 @@ get_containerfile_path() {
     example-cloudinit-hook-sidecar) echo "cmd/sidecars/cloudinit/Containerfile" ;;
     example-node-hook-plugin) echo "cmd/example-node-hook-plugin/Containerfile" ;;
     test-launcher-hook-sidecar) echo "cmd/plugin-sidecars/test-launcher-hook/Containerfile" ;;
-    test-helpers) echo "cmd/test-helpers/pod-mutator/Containerfile" ;;
+    test-helpers) echo "cmd/test-helpers/Containerfile" ;;
     *)
         echo "ERROR: Unknown image: $image_name" >&2
         return 1
@@ -397,6 +398,8 @@ for image in ${REGULAR_BUILD_IMAGES}; do
         extra_args="--build-arg LIBGUESTFS_BASE_IMAGE=${LIBGUESTFS_BASE_IMAGE}"
     elif [[ "${image}" == "pr-helper" ]]; then
         extra_args="--build-arg PR_HELPER_BASE_IMAGE=${PR_HELPER_BASE_IMAGE}"
+    elif [[ "${image}" == "test-helpers" ]]; then
+        extra_args="--build-arg TEST_HELPERS_BASE_IMAGE=${TEST_HELPERS_BASE_IMAGE}"
     elif [[ "${image}" == "sidecar-shim" ]]; then
         extra_args="--build-arg SIDECAR_SHIM_BASE_IMAGE=${SIDECAR_SHIM_BASE_IMAGE}"
     elif [[ "${image}" == "network-passt-binding-cni" ]]; then

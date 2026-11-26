@@ -78,6 +78,10 @@ compute_tars_for_image() {
         # handlerbase also needs passt-repair from the passt tree
         trees+=" passt_tree"
     fi
+    if [[ "${image}" == "test-helpers-base" ]]; then
+        # passt for the DRA network test driver
+        trees="passt_tree"
+    fi
     if [[ "${image}" == "libvirt-devel" ]]; then
         # cross-linking virt-exportserver also needs the libnbd headers/libs
         trees+=" libnbd-devel"

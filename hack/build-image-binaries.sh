@@ -90,6 +90,8 @@ compile_programs() {
     CGO_ENABLED=0 BIN_NAME=none hack/build-go.sh install ${static_programs}
     CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go_build \
         -o ${CMD_OUT_DIR}/libvirt-hook-client/libvirt-hook-client ./cmd/virt-launcher/libvirt-hook-client
+    CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go_build \
+        -o ${CMD_OUT_DIR}/dra-network-test-driver/dra-network-test-driver ./cmd/test-helpers/dra-network-test-driver/cmd
     BIN_NAME=none hack/build-go.sh install ${programs}
 
     # The libvirt and libnbd headers and libraries of ARCH, for the groups below
