@@ -52,7 +52,7 @@ else
     ARCH=${HOST_ARCH}
 fi
 
-# The C compiler for cgo and the container-disk binary
+# The C compiler for cgo and the container-disk and virt-launcher-monitor binaries
 CC=${CC:-gcc}
 
 # Cross-compiling: point cgo at the matching cross compiler. CGO_ENABLED is
@@ -139,7 +139,7 @@ if [ "${target}" = "install" ]; then
         if [ -z "$BIN_NAME" ] || [[ $BIN_NAME == *"virt-launcher-monitor"* ]]; then
             mkdir -p ${CMD_OUT_DIR}/virt-launcher-monitor
             echo "building static binary virt-launcher-monitor"
-            gcc -static -O2 -Wall -Wextra -Werror -o ${CMD_OUT_DIR}/virt-launcher-monitor/virt-launcher-monitor \
+            ${CC} -static -O2 -Wall -Wextra -Werror -o ${CMD_OUT_DIR}/virt-launcher-monitor/virt-launcher-monitor \
                 ${KUBEVIRT_DIR}/cmd/virt-launcher-monitor/main.c
             kubevirt::version::get_version_vars
             echo "$KUBEVIRT_GIT_VERSION" >${CMD_OUT_DIR}/virt-launcher-monitor/.version

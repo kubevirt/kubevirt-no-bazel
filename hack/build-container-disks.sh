@@ -53,16 +53,16 @@ echo "==============================================="
 
 mkdir -p "${CACHE_DIR}"
 
-# Build a container disk image from the disk of a WORKSPACE entry
+# Build a container disk image from a disk pinned in MODULE.bazel
 build_container_disk() {
     local name=$1
-    local workspace_name=$2
+    local module_name=$2
     local package_dir=${3:-/disk}
     local disk
 
-    echo "Building ${name} from ${workspace_name}"
+    echo "Building ${name} from ${module_name}"
     echo "Package dir: ${package_dir}"
-    disk=$(rpmtree::fetch "${workspace_name}")
+    disk=$(rpmtree::fetch "${module_name}")
 
     # Create Containerfile. The disk is named "downloaded", like the file of
     # the http_file rule that the Bazel image is built from.

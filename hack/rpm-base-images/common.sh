@@ -33,6 +33,7 @@ get_base_images_for_arch() {
         "exportserverbase"
         "sidecar-shim-base"
         "testimage"
+        "test-helpers-base"
     )
 
     # pr-helper not available for s390x

@@ -16,16 +16,18 @@
 #
 # Copyright The KubeVirt Authors.
 #
-# Helpers to use the rpmtree() rules in rpm/BUILD.bazel and the pinned
-# downloads in WORKSPACE without Bazel. Source this file.
+# Helpers to use the rpmtree() rules in rpm/BUILD.bazel, the RPMs pinned in
+# rpms.json and the downloads pinned in MODULE.bazel without Bazel. Source
+# this file.
 #
-# Downloads are verified against the sha256 from WORKSPACE and cached by
-# checksum outside the repository (so they don't end up in container build
-# contexts). The GCS mirror is tried before the upstream URLs.
+# Downloads are verified against the pinned sha256 and cached by checksum
+# outside the repository (so they don't end up in container build contexts).
+# The GCS mirror is tried before the upstream URLs.
 
 RPMTREE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RPMTREE_BUILDFILE=${RPMTREE_BUILDFILE:-${RPMTREE_REPO_ROOT}/rpm/BUILD.bazel}
-RPMTREE_WORKSPACE=${RPMTREE_WORKSPACE:-${RPMTREE_REPO_ROOT}/WORKSPACE}
+RPMTREE_LOCKFILE=${RPMTREE_LOCKFILE:-${RPMTREE_REPO_ROOT}/rpms.json}
+RPMTREE_MODULE=${RPMTREE_MODULE:-${RPMTREE_REPO_ROOT}/MODULE.bazel}
 RPMTREE_CACHE_DIR=${RPMTREE_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/kubevirt/rpms}
 
 # Print the lines of the rule called $2 in file $1 (from its name to the
@@ -38,10 +40,11 @@ function rpmtree::_rule() {
     ' "$1"
 }
 
-# Print the rpm() names an rpmtree() rule depends on, one per line.
+# Print the rpms.json names of the RPMs an rpmtree() rule depends on, one
+# per line.
 function rpmtree::rpms() {
     rpmtree::_rule "${RPMTREE_BUILDFILE}" "$1" |
-        awk 'match($0, /"@[^"]+\/\/rpm"/) { print substr($0, RSTART + 2, RLENGTH - 8) }'
+        awk 'match($0, /"@kubevirt-rpms\/\/[^"]+"/) { print substr($0, RSTART + 17, RLENGTH - 18) }'
 }
 
 # Print the symlinks of an rpmtree() rule as "path=target", one per line.
@@ -76,13 +79,40 @@ function rpmtree::capabilities() {
     '
 }
 
-# Print "sha256 <sum>" and "url <url>" lines for a WORKSPACE entry
-# (rpm(), http_archive(), http_file()).
-function rpmtree::_workspace_entry() {
-    rpmtree::_rule "${RPMTREE_WORKSPACE}" "$1" | awk '
+# Print "integrity <base64 sha256>" and "url <url>" lines for an RPM in
+# rpms.json.
+function rpmtree::_lockfile_entry() {
+    awk -v name="$1" '
+        /"name": "/ { split($0, parts, "\""); found = (parts[4] == name); next }
+        found && /"integrity": "sha256-/ { split($0, parts, "\""); print "integrity " substr(parts[4], 8) }
+        found && /"https?:\/\// { split($0, parts, "\""); print "url " parts[2] }
+        found && /^[[:space:]]*\}/ { exit }
+    ' "${RPMTREE_LOCKFILE}"
+}
+
+# Print "sha256 <sum>" and "url <url>" lines for an http_file() or
+# http_archive() in MODULE.bazel.
+function rpmtree::_module_entry() {
+    rpmtree::_rule "${RPMTREE_MODULE}" "$1" | awk '
         /^    sha256 = / { split($0, parts, "\""); print "sha256 " parts[2] }
         /"https?:\/\// { split($0, parts, "\""); print "url " parts[2] }
     '
+}
+
+# Print "sha256 <sum>" and "url <url>" lines for an RPM in rpms.json or a
+# download in MODULE.bazel.
+function rpmtree::_entry() {
+    local entry integrity
+    entry=$(rpmtree::_lockfile_entry "$1")
+    if [ -z "${entry}" ]; then
+        rpmtree::_module_entry "$1"
+        return
+    fi
+    integrity=$(awk '$1 == "integrity" { print $2; exit }' <<<"${entry}")
+    if [ -n "${integrity}" ]; then
+        echo "sha256 $(printf '%s' "${integrity}" | base64 -d | od -An -v -tx1 | tr -d ' \n')"
+    fi
+    awk '$1 == "url"' <<<"${entry}"
 }
 
 function rpmtree::_checksum() {
@@ -93,15 +123,16 @@ function rpmtree::_checksum() {
     fi
 }
 
-# Download a WORKSPACE entry into the cache (if not cached yet), verify its
-# checksum and print the path of the cached file.
+# Download an RPM from rpms.json or a download from MODULE.bazel into the
+# cache (if not cached yet), verify its checksum and print the path of the
+# cached file.
 function rpmtree::fetch() {
     local name="$1"
     local entry sha dest url
-    entry=$(rpmtree::_workspace_entry "${name}")
+    entry=$(rpmtree::_entry "${name}")
     sha=$(echo "${entry}" | awk '$1 == "sha256" { print $2; exit }')
     if [ -z "${sha}" ]; then
-        echo "ERROR: no sha256 found for '${name}' in ${RPMTREE_WORKSPACE}" >&2
+        echo "ERROR: no sha256 found for '${name}' in ${RPMTREE_LOCKFILE} or ${RPMTREE_MODULE}" >&2
         return 1
     fi
 
@@ -112,7 +143,7 @@ function rpmtree::fetch() {
     fi
 
     mkdir -p "${RPMTREE_CACHE_DIR}"
-    # GCS mirror first, then the upstream URLs in the order WORKSPACE lists them.
+    # GCS mirror first, then the upstream URLs in their pinned order.
     for url in $(echo "${entry}" | awk '$1 == "url" && $2 ~ /storage\.googleapis\.com/ { print $2 }') \
         $(echo "${entry}" | awk '$1 == "url" && $2 !~ /storage\.googleapis\.com/ { print $2 }'); do
         # curl has no timeout by default, and --retry does not fire on a stalled transfer

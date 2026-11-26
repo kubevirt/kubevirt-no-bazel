@@ -31,7 +31,7 @@ FROM ${TESTING_BASE_IMAGE}
 ARG ALPINE_ISO
 
 COPY --from=disk-builder /workspace/images /images
-# The Alpine ISO of WORKSPACE, from the alpine-iso build context
+# The Alpine ISO of MODULE.bazel, from the alpine-iso build context
 COPY --from=alpine-iso ${ALPINE_ISO} /images/alpine/disk.img
 
 COPY images/disks-images-provider/entrypoint.sh /entrypoint.sh

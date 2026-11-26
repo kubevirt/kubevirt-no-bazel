@@ -22,8 +22,9 @@
 # (hack/dockerized), so all programs share one Go build cache, and the
 # Containerfiles only copy them.
 #
-# virt-launcher and virt-handler compile against the libvirt-devel base image
-# (LIBVIRT_DEVEL_IMAGE) of that architecture, which skopeo unpacks here.
+# virt-launcher, virt-handler and virt-exportserver compile against the
+# libvirt-devel base image (LIBVIRT_DEVEL_IMAGE) of that architecture, which
+# skopeo unpacks here. It also has the libnbd headers and libraries.
 
 set -e
 
@@ -51,7 +52,6 @@ programs="
     cmd/virt-operator
     tools/csv-generator
     cmd/virt-exportproxy
-    cmd/virt-exportserver
     cmd/synchronization-controller
     cmd/sidecars/network-passt-binding
     cmd/sidecars/test-network-vhostuser-dra-binding
@@ -68,6 +68,9 @@ handler_programs="
     cmd/virt-handler
     cmd/virt-chroot
 "
+libnbd_programs="
+    cmd/virt-exportserver
+"
 
 # Compile all programs for ARCH; hack/build-go.sh cross-compiles when needed
 compile_programs() {
@@ -78,7 +81,7 @@ compile_programs() {
     # hack/build-go.sh names the programs after the version, so remove the
     # ones of earlier versions
     local program
-    for program in ${static_programs} ${programs} ${launcher_programs} ${handler_programs}; do
+    for program in ${static_programs} ${programs} ${launcher_programs} ${handler_programs} ${libnbd_programs}; do
         rm -f ${CMD_OUT_DIR}/$(basename ${program})/*-linux-${ARCH}
     done
 
@@ -87,15 +90,19 @@ compile_programs() {
     CGO_ENABLED=0 BIN_NAME=none hack/build-go.sh install ${static_programs}
     CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go_build \
         -o ${CMD_OUT_DIR}/libvirt-hook-client/libvirt-hook-client ./cmd/virt-launcher/libvirt-hook-client
+    CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go_build \
+        -o ${CMD_OUT_DIR}/dra-network-test-driver/dra-network-test-driver ./cmd/test-helpers/dra-network-test-driver/cmd
     BIN_NAME=none hack/build-go.sh install ${programs}
 
-    # The libvirt headers and libraries of ARCH, for the two groups below
+    # The libvirt and libnbd headers and libraries of ARCH, for the groups below
     export PKG_CONFIG_PATH=${devel}/usr/lib64/pkgconfig
     export CGO_CFLAGS="-I${devel}/usr/include"
     export CGO_LDFLAGS="-L${devel}/usr/lib64"
     CGO_LDFLAGS="${CGO_LDFLAGS} -Wl,--allow-shlib-undefined" \
         hack/build-go.sh install ${launcher_programs}
     BIN_NAME=none hack/build-go.sh install ${handler_programs}
+    CGO_LDFLAGS="${CGO_LDFLAGS} -Wl,--allow-shlib-undefined" \
+        BIN_NAME=none hack/build-go.sh install ${libnbd_programs}
 }
 
 # Unpack the libvirt-devel image, unless the same image is unpacked already
